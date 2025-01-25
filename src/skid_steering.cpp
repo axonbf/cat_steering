@@ -7,6 +7,7 @@
 #include "rclcpp/timer.hpp"
 #include <mavros_msgs/msg/override_rc_in.hpp>
 #include <mavros_msgs/msg/rc_out.hpp>
+#include <mavros_msgs/msg/vfr_hud.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <std_msgs/msg/float64.hpp>
 #include <sensor_msgs/msg/joy.hpp>
@@ -33,6 +34,13 @@
 // Question 2.-: What is the speed = Actual speed - Theoretichal speed; Vx_the = rpm/60*pp in [m/s]
 // Kv left mean:  303.6356
 // Kv right mean: 301.7117
+///mavros/vfr_hud    -> air speed/ ground speed
+///mavros/gps1/raw   -> vel or epv
+
+//angular speed:
+///mavros/local_position/odom
+///mavros/local_position/velocity_body
+///mavros/imu/data
 
 // Demos: https://github.com/ros2/demos/blob/06f25e9c8801ea95a0c25260cb38f2f0c6af3ea0/demo_nodes_cpp/src/services/add_two_ints_client_async.cpp#L62-L73
 
@@ -52,42 +60,24 @@ class Skid_Steering : public rclcpp::Node
       if(paddle_mode){
         mavros_msgs::msg::OverrideRCIn rcOverride;
           if(str_mode == 0){ //gamepad skid
-            // lineal funtin y = m*x + c; if m = 0; y = 1500, therefore c = 1500
+            // ****lineal funtin y = m*x + c; if m = 0; y = 1500, therefore c = 1500
             // if x = -1; y = 1050; therefore m = (1050 - 1500)/(-1) = 450;
             // y = 450*x + 1500;
             // from RC_In to Servo remapping ->  RC(1050 - 1950) Servo(1100 - 1950)
             // y = m*x + c; if x = 1500; y = 1500; 
-            int16_t x_speed     = (fabs(msg.linear.x )<0.01 ? 0 : msg.linear.x ) * 450 + 1500; //doulbe
-            int16_t z_angul_dif = (fabs(msg.angular.z)<0.01 ? 0 : msg.angular.z) * 450;
-            //RCLCPP_INFO(this->get_logger(), "x_speed %d; z_angul_dif %d. ", x_speed, z_angul_dif);
 
-            rcOverride.channels[0] = x_speed + z_angul_dif; //1575; / min 1050 - 1950 // steering
-            if(rcOverride.channels[0] < 1050) rcOverride.channels[0] = 1050;
-            if(rcOverride.channels[0] > 1950) rcOverride.channels[0] = 1950;
-            rcOverride.channels[2] = x_speed - z_angul_dif; //1500; / min 1050 - 1950 // speed
-            if(rcOverride.channels[2] < 1050) rcOverride.channels[2] = 1050;
-            if(rcOverride.channels[2] > 1950) rcOverride.channels[2] = 1950;
-            this->rc_override_pub_->publish(rcOverride);
+            set_differential_steering_skid(msg.linear.x*max_speed_, msg.angular.z*max_speed_);
           }
           if(str_mode == 1){ //gamepad paddle
-            int16_t rc_left  = (fabs(gamepad.axes[1])<0.01 ? 0 : gamepad.axes[1])*450 + 1500;
+            uint16_t rc_left  = (uint16_t)((fabs(gamepad.axes[1])<0.01 ? 0 : gamepad.axes[1])*450 + 1500);
             //int16_t rc_right = (fabs(gamepad.axes[4])<0.01 ? 0 : gamepad.axes[4])*450 + 1500;
-            int16_t rc_right = (fabs(gamepad.axes[3])<0.01 ? 0 : gamepad.axes[3])*450 + 1500;
+            uint16_t rc_right = (uint16_t)((fabs(gamepad.axes[3])<0.01 ? 0 : gamepad.axes[3])*450 + 1500);
             rcOverride.channels[LEFT] = rc_left;
             rcOverride.channels[RIGHT] = rc_right;
             this->rc_override_pub_->publish(rcOverride);
           }
       }
     };
-
-/*
-    auto raw_servo_callback =
-    [this](mavros_msgs::msg::RCOut msg) -> void{
-      this->servo_output->channels[RIGHT] = msg.channels[RIGHT];
-      this->servo_output->channels[LEFT]  = msg.channels[LEFT];
-      //RCLCPP_INFO(this->get_logger(), "servo_left: %d; servo_right: %d",servo_output->channels[LEFT], servo_output->channels[RIGHT]);
-    };
-    */
 
     auto battery_state_callback =
     [this](sensor_msgs::msg::BatteryState msg) ->void{
@@ -99,60 +89,67 @@ class Skid_Steering : public rclcpp::Node
     auto str_timer_callback =
     [this]() -> void{
       //V = [RPM x PP x (1- S) x GR] / 60 
-      float_t servo_right_percent = (servo_raw_right-1500)/400.0; // from 1100 to 1900
-      float_t servo_left_percent  = (servo_raw_left-1500)/400.0; // from 1100 to 1900
-      float_t mot_rpm_th_r = Kv_right*battery_voltage*servo_right_percent; //Kv*Voltage;
-      float_t mot_rpm_th_l = Kv_left*battery_voltage*servo_left_percent;
-      float_t th_Vl = mot_rpm_th_l/60 * prop_p;
-      float_t th_Vr = mot_rpm_th_r/60 * prop_p;
-      RCLCPP_INFO(this->get_logger(), "Vx_l(Kv*Volt*servo_l): %f(%f*%f*%f); Vx_r(Kv*Volt*servo_r): %f(%f*%f*%f)", th_Vl, Kv_left, battery_voltage, servo_left_percent, th_Vr, Kv_right, battery_voltage, servo_right_percent);
-
-      RCLCPP_INFO(this->get_logger(), "servo_left: %d; servo_right: %d; battery_voltage: %f; rpm_left: %f; rpm_right: %f; th_Vx_l: %f; th_Vx_r: %f; th_curvature_: %f; th_radius_: %f; diameter: %f ",servo_raw_left, servo_raw_right, battery_voltage, th_motor_rpm_left_, th_motor_rpm_right_, th_Vx_l, th_Vx_r, th_curvature_,th_radius_,2*th_radius_);
+      /**/
+      //float_t servo_right_percent = (servo_raw_right-1500)/400.0; // from 1100 to 1900
+      //float_t servo_left_percent  = (servo_raw_left-1500)/400.0; // from 1100 to 1900
+      //float_t mot_rpm_th_r = Kv_right*battery_voltage*servo_right_percent; //Kv*Voltage;
+      //float_t mot_rpm_th_l = Kv_left*battery_voltage*servo_left_percent;
+      //float_t th_Vl = mot_rpm_th_l/60 * prop_p;
+      //float_t th_Vr = mot_rpm_th_r/60 * prop_p;
+      
+      //
+      //RCLCPP_INFO(this->get_logger(), "Vx_l(Kv*Volt*servo_l): %f(%f*%f*%f); Vx_r(Kv*Volt*servo_r): %f(%f*%f*%f)", th_Vl, Kv_left, battery_voltage, servo_left_percent, th_Vr, Kv_right, battery_voltage, servo_right_percent);
+      //RCLCPP_INFO(this->get_logger(), "servo_left: %d; servo_right: %d; battery_voltage: %f; rpm_left: %f; rpm_right: %f; th_Vx_l: %f; th_Vx_r: %f; th_curvature_: %f; th_radius_: %f; diameter: %f ",servo_raw_left, servo_raw_right, battery_voltage, th_motor_rpm_left_, th_motor_rpm_right_, th_Vx_l, th_Vx_r, th_curvature_,th_radius_,2*th_radius_);
+      /**/
     };
 
     auto timer_callback =
     [this]() -> void {
-      if(!get_parameters_service_available){
+    //RCLCPP_INFO(this->get_logger(),"[timer 01]");
+      if(!get_parameters_service_available)
+      {
         while(!client_get_parameters_->wait_for_service(1s)){
           if (!rclcpp::ok()){
            RCLCPP_ERROR(
-             this->get_logger(), "Client interrumped while waiting for service %s. Terminating...",client_get_parameters_->get_service_name());
+             this->get_logger(), "[timer_callback get_param] Client interrumped while waiting for service %s. Terminating...",client_get_parameters_->get_service_name());
            return;
           }
-         RCLCPP_INFO(this->get_logger(), "Service '%s' Unavailable. Waiting for service... ", std::string(client_get_parameters_->get_service_name()).c_str());
+         RCLCPP_INFO(this->get_logger(), "[timer_callback get_param] Service '%s' Unavailable. Waiting for service... ", std::string(client_get_parameters_->get_service_name()).c_str());
         }
-        RCLCPP_INFO(this->get_logger(), "Service '%s' ON-LINE. ", client_get_parameters_->get_service_name());
+        RCLCPP_INFO(this->get_logger(), "[timer_callback get_param] Service '%s' ON-LINE. ", client_get_parameters_->get_service_name());
         get_parameters_service_available = true;
         response_get_pilot_steer_type_received = false;
-        call_async_get_pilot_steer_type();
+        call_async_get_pilot_steer_type(); 
       }
 
-      if(!set_parameters_service_available){
+      if(!set_parameters_service_available)
+      {
         while(!client_set_parameters_->wait_for_service(1s)){
           if (!rclcpp::ok()){
            RCLCPP_ERROR(
-             this->get_logger(), "Client interrumped while waiting for service %s. Terminating... ",client_set_parameters_->get_service_name());
+             this->get_logger(), "[timer_callback set_param] Client interrumped while waiting for service %s. Terminating... ",client_set_parameters_->get_service_name());
            return;
           }
-         RCLCPP_INFO(this->get_logger(), "Service '%s' Unavailable. Waiting for service... ", std::string(client_set_parameters_->get_service_name()).c_str());
+         RCLCPP_INFO(this->get_logger(), "[timer_callback set_param] Service '%s' Unavailable. Waiting for service... ", std::string(client_set_parameters_->get_service_name()).c_str());
         }
-        RCLCPP_INFO(this->get_logger(), "Service '%s' ON-LINE. ", client_set_parameters_->get_service_name());
+        RCLCPP_INFO(this->get_logger(), "[timer_callback set_param] Service '%s' ON-LINE. ", client_set_parameters_->get_service_name());
         set_parameters_service_available = true;
       }
 
       if (desired_pilot_steer_type != current_pilot_steer_type && response_get_pilot_steer_type_received == true)
       {
-        RCLCPP_INFO(this->get_logger(), "desired_pilot_steer_type '%s' different than current '%s'. ", to_string(desired_pilot_steer_type).c_str(), to_string(current_pilot_steer_type).c_str());
+        RCLCPP_INFO(this->get_logger(), "[timer_callback] desired_pilot_steer_type '%s' different than current '%s'. ", to_string(desired_pilot_steer_type).c_str(), to_string(current_pilot_steer_type).c_str());
         if( response_set_pilot_steer_type_received == true)
         {
           response_set_pilot_steer_type_received = false;
-          call_async_set_pilot_steer_type(desired_pilot_steer_type);
+          call_async_set_pilot_steer_type(desired_pilot_steer_type); //***
         }
       }
     };
 
     auto joy_callback = 
     [this] (sensor_msgs::msg::Joy msg) -> void{
+      //RCLCPP_INFO(this->get_logger(),"joy_callback");
       gamepad = msg;
 
       if(msg.buttons[5] == 0)
@@ -175,7 +172,7 @@ class Skid_Steering : public rclcpp::Node
 
       if(pilot_steer_button_last != msg.buttons[5])
       {
-        RCLCPP_INFO(this->get_logger(), "Gamepad steering state changed from %d to %d. ", pilot_steer_button_last , msg.buttons[5]);
+        RCLCPP_INFO(this->get_logger(), "[joy_callback] Gamepad steering state changed from %d to %d. ", pilot_steer_button_last , msg.buttons[5]);
         pilot_steer_button_last = msg.buttons[5];
       }
 
@@ -184,16 +181,24 @@ class Skid_Steering : public rclcpp::Node
     // Subscribers
     cmd_vel_sub_       = this->create_subscription<geometry_msgs::msg::Twist     >("cmd_vel",        10, cmd_vel_callback);
     gamepad_           = this->create_subscription<sensor_msgs::msg::Joy         >("joy",            10, joy_callback);
-    //raw_servo_sub_     = this->create_subscription<mavros_msgs::msg::RCOut       >("mavros/rc/out",  10, raw_servo_callback);
-    raw_servo_sub_     = this->create_subscription<mavros_msgs::msg::RCOut       >("mavros/rc/out",  10, std::bind(&Skid_Steering::raw_servo_callback,this,_1));
+    ////raw_servo_sub_     = this->create_subscription<mavros_msgs::msg::RCOut       >("mavros/rc/out",  10, raw_servo_callback);
+    raw_servo_sub_     = this->create_subscription<mavros_msgs::msg::RCOut       >("mavros/rc/out",  10,                      std::bind(&Skid_Steering::raw_servo_callback,this,_1));
     battery_state_sub_ = this->create_subscription<sensor_msgs::msg::BatteryState>("mavros/battery", rclcpp::SensorDataQoS(), battery_state_callback);
-    double th_motor_rpm_left(uint16_t rc_in_left);
-    double th_motor_rpm_right(uint16_t rc_in_right);
-    double th_curvature(void);
-    double th_motor_linear_speed_left (void);
-    double th_motor_linear_speed_right(void);
-    double th_veh_linear_speed(void);
-    double th_veh_angular_speed(void);
+    //vfr_sub_           = this->create_subscription<mavros_msgs::msg::VfrHud>      ("/mavros/vfr_hud",rclcpp::SensorDataQoS(), vfr_callback);
+    vfr_sub_           = this->create_subscription<mavros_msgs::msg::VfrHud>      ("/mavros/vfr_hud",rclcpp::SensorDataQoS(), std::bind(&Skid_Steering::vfr_callback      ,this,_1));
+
+    //general functions
+    double_t th_motor_rpm_left(uint16_t rc_in_left);
+    double_t th_motor_rpm_right(uint16_t rc_in_right);
+    double_t th_curvature(void);
+    double_t th_motor_linear_speed_left (void);
+    double_t th_motor_linear_speed_right(void);
+    double_t th_veh_linear_speed(void);
+    double_t th_veh_angular_speed(void);
+    void     set_differential_steering_skid(double_t linear_speed, double_t angular_speed);
+    void         set_speed_and_radious_skid(double_t linear_speed, double_t radious);
+    uint16_t left_speed_2_rc(double_t left_speed);
+    uint16_t rith_speed_2_rc(double_t righ_speed);
 
     // Publishers
     rc_override_pub_  = this->create_publisher<mavros_msgs::msg::OverrideRCIn>("mavros/rc/override",10);
@@ -205,6 +210,7 @@ class Skid_Steering : public rclcpp::Node
     th_radius_pub_    = this->create_publisher<std_msgs::msg::Float64>("cat/th_radius",10);
     th_rpm_left_pub_  = this->create_publisher<std_msgs::msg::Float64>("cat/th_rpm_left",10);
     th_rpm_right_pub_ = this->create_publisher<std_msgs::msg::Float64>("cat/th_rpm_right",10);
+    slip_pub_         = this->create_publisher<std_msgs::msg::Float64>("cat/slip",10);
 
     // Services
     client_get_parameters_       = this->create_client<rcl_interfaces::srv::GetParameters>("mavros/param/get_parameters");
@@ -221,6 +227,7 @@ class Skid_Steering : public rclcpp::Node
   rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr gamepad_;
   rclcpp::Subscription<mavros_msgs::msg::RCOut>::SharedPtr raw_servo_sub_;
   rclcpp::Subscription<sensor_msgs::msg::BatteryState>::SharedPtr battery_state_sub_;
+  rclcpp::Subscription<mavros_msgs::msg::VfrHud>::SharedPtr vfr_sub_;
 
   rclcpp::Publisher<mavros_msgs::msg::OverrideRCIn>::SharedPtr rc_override_pub_;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr th_curvature_pub_; // th_curvature
@@ -231,6 +238,7 @@ class Skid_Steering : public rclcpp::Node
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr th_radius_pub_; // th_radius
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr th_rpm_left_pub_; // th_rpm_left
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr th_rpm_right_pub_; // th_rpm_right
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr slip_pub_; 
   
   rclcpp::Client<rcl_interfaces::srv::GetParameters>::SharedPtr client_get_parameters_; // td_srvs::srv::SetBoll>::SharedPtr client_;
   rclcpp::Client<rcl_interfaces::srv::SetParameters>::SharedPtr client_set_parameters_; // td_srvs::srv::SetBoll>::SharedPtr client_;
@@ -246,18 +254,20 @@ class Skid_Steering : public rclcpp::Node
   bool set_parameters_service_available = false;
   //bool pilot_steer_type_change_rqst = false;
   int  pilot_steer_button_last = 0;
-  // Kv left mean:  303.6356
-  // Kv right mean: 301.7117
+
   float_t Kv_left  = 303.6535;// 350;  //
   float_t Kv_right = 301.7117;// 350;  //
-  //float V_nom = 11.1; // nominal voltage from Battery LiPo 3S
-  //float V_mes = 0.0;
 
   // PP propeller pitch and diameter
+  // uint16_t prop_p = 7; // cm according to the formulas atan(1.5/2) = 36.8. Making a triangle where Ca = perimeter using 3 cm  for diameter (the half), Ca will be the pitch
+  // V = [RPM x PP x (1- S) x GR] / 60 
   float_t prop_d = 0.06; // [m] Diameter from the center of to the tip of the propeller 
   float_t prop_p = 0.022; //0.03; // [m] measuring the mark on the motor we have 3.5; // cm from pbo.couk/choose-right-boat-propeller-6205 I take 4x(1/2*1.5cm) = 0.75*4 = 3 cm pitch
-  // uint16_t prop_p = 7; // cm according to the formulas atan(1.5/2) = 36.8. Making a triangle where Ca = perimeter using 3 cm  for diameter (the half), Ca will be the pitch
-  //V = [RPM x PP x (1- S) x GR] / 60 
+  float_t min_voltage_ = 11.15;
+  float_t th_slip_     = 0.13;
+  float_t slip_{};
+  float_t motor_limit_ = 0.98;
+  float_t max_speed_   = (1-th_slip_)*(Kv_left > Kv_right ? Kv_right*min_voltage_/60*prop_p : Kv_left*min_voltage_/60*prop_p);
   float_t th_Vx_l{};
   float_t th_Vx_r{};
 
@@ -267,6 +277,7 @@ class Skid_Steering : public rclcpp::Node
   double_t th_curvature_{};
   double_t th_Vx_{};
   double_t th_w_{};
+  float_t ground_speed_{};
   double_t th_radius_{};
   double_t th_sleep_ = 1.0;//0.873;
   
@@ -288,82 +299,69 @@ class Skid_Steering : public rclcpp::Node
 
   float trackWith_ = 0.28; // 28 [cm]
 
-  double th_motor_rpm_left (uint16_t rc_in_left)
+  double_t th_motor_rpm_left (uint16_t rc_in_left)
   {
     // ToDo -> utils calculate sign
-    // ToDo -> map between two lineal function: map(value, low1, high1, low2, high2) -> low2 + (value - low1) * (high2 - low2) / (high1 - low1) https://stackoverflow.com/questions/3451553/value-remapping
     // RC   % = |   1559 |   1560 |   1564 |   1600 |   1700 |   1800 |   1900 |   1950 |
     // rpms % = | 0.0000 | 0.0762 | 0.0907 | 0.3109 | 0.7596 | 0.9508 | 0.9861 | 1.0000 |
-    // rpm_left_percent = -1.0753 + 0.03446*x - 0.00038607*x^2 + 2.537e^-6*x^3 - 8.8022e^-9*x^4  + 1.5002e^-11*x^5 -9.9132e^-15*x^6// this is on relation to rc input and normalized for 11.42 volts
-    // rpm_left = 4.0973e+08 -1.4509e+06 2.1376e+03 -1.6772e+00  7.3926e-04 -1.7356e-07 1.6958e-11               
-    // double x =  rc_in_left - 1500; // RC input, but we should adjust to the row_servo for eachm otor
-    // double rpm_left_percent_rc = - 1.0753 + 0.03446*x          - 0.00038607*pow(x,2)
-    //                              + 2.5370*pow(10, -6)*pow(x,3) - 8.8022*pow(10, -9)*pow(x,4)  
-    //                              + 1.5002*pow(10,-11)*pow(x,5) - 9.9132*pow(10,-15)*pow(x,6);
-
-    // rpm_left_percent = -1.0605e-01 + 3.8462e-03*X + 9.2575e-05*X^2 - 1.0532e-06*X^3 + 4.7222e-09*X^4 - 9.8371e-12*X^5 + 7.8128e-15*X^6 // based on the servo output and normalized for 11.42 volts
-     int16_t  x = rc_in_left - 1500;
+    int16_t  x = rc_in_left - 1500;
     uint16_t ux = abs(x);
-    double rpm_left_percent = - 0.10605 + 0.0038462*ux       + 9.2575*pow(10, -5)*pow(ux,2)
-                              - 1.0532*pow(10, -6)*pow(ux,3) + 4.7222*pow(10, -9)*pow(ux,4)  
-                              - 9.8371*pow(10,-12)*pow(ux,5) + 7.8128*pow(10,-15)*pow(ux,6);
-    if( (0 < ux ) && (ux < 28) ) rpm_left_percent = 0.0;
-    else rpm_left_percent = rpm_left_percent*(x/ux);
+    // rpm_right_percetn = -5.832325307760911e-14   4.920713129609684e-11   1.029277435759187e-08  -2.430456929159689e-05   9.378150682378419e-03  -1.867135238096345e-01
+    double_t rpm_left_percent = -5.832325307760911*pow(10,-14)*pow(ux,5)+4.920713129609684*pow(10,-11)*pow(ux,4)+1.029277435759187*pow(10,-8)*pow(ux,3)-2.430456929159689*pow(10,-5)*pow(ux,2)+9.378150682378419*pow(10,-3)*pow(ux,1)-1.867135238096345*pow(10,-1);
+    if( ((0 < ux ) && (ux < 28)) || (ux == 0) ) rpm_left_percent = 0.0;
+    else rpm_left_percent = rpm_left_percent*(double_t)(x/ux);
 
-    double rpm_left = battery_voltage*Kv_left*rpm_left_percent;
+    double_t rpm_left = battery_voltage*Kv_left*rpm_left_percent;
+    //RCLCPP_INFO(this->get_logger(), "rc_in_left: %d; rpm_percent_left: %f; rpm_left: %f",ux,rpm_left_percent,rpm_left );
+    //RCLCPP_INFO(this->get_logger(), " ux: %d; 5.5110e-21*x^9: %f;  -1.0048e-17*x^8: %f;  7.6943e-15*x^7: %f;  -3.2069e-12*x^6: %f;   7.8690e-10*x^5: %f;  -1.1463e-07*x^4: %f;   9.5073e-06*x^3: %f;  -4.2487e-04*x^2: %f;   1.6236e-02*x^1: %f;  -2.1602e-01: %f;",
+    //xx,5.5110*pow(10,-21)*pow(xx,9),-1.0048*pow(10,-17)*pow(xx,8),7.6943*pow(10,-15)*pow(xx,7),-3.2069*pow(10,-12)*pow(xx,6),+7.8690*pow(10,-10)*pow(xx,5),-1.1463*pow(10,-7)*pow(xx,4),+9.5073*pow(10,-6)*pow(xx,3),-4.2487*pow(10,-4)*pow(xx,2),+1.6236*pow(10,-2)*pow(xx,1),-2.1602*pow(10,-1));
     return rpm_left;
   }
 
-  double th_motor_rpm_right (uint16_t rc_in_right)
+  double_t th_motor_rpm_right (uint16_t rc_in_right)
   {
     // RC   % = |   1559 |   1560 |   1564 |   1600 |   1700 |   1800 |   1900 |   1950 |
     // rpms % = | 0.0000 | 0.0000 | 0.0874 | 0.3150 | 0.7592 | 0.9563 | 0.9949 | 1.0000 |
-    // rpm_right_percent = -0.48545  + 0.0086215*x + 1.2704e^-5x^2 - 2.9581e^-7*x^3 +1.2696e^-9*x^4 - 2.4067e^-12*x^5 + 1.7269e^-15*x^6 // based on rc input and normalized for 11.52volts
-    //double rpm_right_percent_rc = - 0.48545 + 0.0086215*x       + 1.2704*pow(10, -5)*pow(x,2) 
-    //                              - 2.9581*pow(10, -7)*pow(x,3) + 1.2696*pow(10, -9)*pow(x,4) 
-    //                              - 2.4067*pow(10,-12)*pow(x,5) + 1.7269*pow(10,-15)*pow(x,6);
-
-    // rpm_right_percent = -1.2498e-01 + 3.8527e-03*X + 9.9540e-05*X^2 -1.1564e-06*X^3 + 5.2962e-09*X^4 - 1.1200e-11*x^5 + 8.9769e-15*X^6
-     int16_t  x = rc_in_right - 1500;
+    int16_t   x = rc_in_right - 1500;
     uint16_t ux = abs(x);
-    double rpm_right_percent = - 0.12498 + 0.0038527*ux       + 9.9540*pow(10, -5)*pow(ux,2) 
-                               - 1.1564*pow(10, -6)*pow(ux,3) + 5.2962*pow(10, -9)*pow(ux,4) 
-                               - 1.1200*pow(10,-11)*pow(ux,5) + 8.9769*pow(10,-15)*pow(ux,6);
-    if( (0 < ux ) && (ux < 28) ) rpm_right_percent = 0.0;
+    // pp_r_6 = 3.942613160784577e-14  -7.547772093367737e-11   6.600020035107555e-08  -3.477702363777966e-05   1.020791539102076e-02  -2.176141967499420e-01
+    double_t rpm_right_percent = 3.942613160784577*pow(10,-14)*pow(ux,5)-7.547772093367737*pow(10,-11)*pow(ux,4)+6.600020035107555*pow(10,-8)*pow(ux,3)-3.477702363777966*pow(10,-5)*pow(ux,2)+1.020791539102076*pow(10,-2)*pow(ux,1)-2.176141967499420*pow(10,-1);
+    if( ((0 < ux ) && (ux < 28)) || (ux == 0) ) rpm_right_percent = 0.0;
     else rpm_right_percent = rpm_right_percent*(x/ux);
 
-    double rpm_right = battery_voltage*Kv_right*rpm_right_percent;
+    double_t rpm_right = battery_voltage*Kv_right*rpm_right_percent;
+    //RCLCPP_INFO(this->get_logger(), "rc_in_right: %d; rpm_percent_right: %f; rpm_right: %f",ux,rpm_right_percent,rpm_right );
     return rpm_right;
   }
 
-  double th_motor_linear_speed_left(void)
+  double_t th_motor_linear_speed_left(void)
   {
     // V = [RPM x PP x (1- S) x GR] / 60 
     //  float_t servo_left_percent  = (servo_raw_left-1500)/400.0; // from 1100 to 1900
     //  float_t mot_rpm_th_l = Kv_left*battery_voltage*servo_left_percent;
     //  th_Vx_l = mot_rpm_th_l/60 * prop_p;
-    double linear_speed_left = th_motor_rpm_left_/60*prop_p;
+    double_t linear_speed_left = th_motor_rpm_left_/60*prop_p;
     return linear_speed_left;
   }
 
-  double th_motor_linear_speed_right(void)
+  double_t th_motor_linear_speed_right(void)
   { 
     // V = [RPM x PP x (1- S) x GR] / 60 
     //  float_t servo_right_percent = (servo_raw_right-1500)/400.0; // from 1100 to 1900
     //  float_t mot_rpm_th_r = Kv_right*battery_voltage*servo_right_percent; //Kv*Voltage;
     //  th_Vx_r = mot_rpm_th_r/60 * prop_p;
-    double linear_speed_right = th_motor_rpm_right_/60*prop_p; 
+    double_t linear_speed_right = th_motor_rpm_right_/60*prop_p; 
     return linear_speed_right;
   }
 
-  double th_curvature(void)
+  double_t th_curvature(void)
   {
     // I guess 3cm radius should be enough 3cm radius is 0.03m
     // which is 33333
-    double th_curvature = 0.0;
-    double th_radius   = 0.0;
-    double th_left_speed  = th_motor_rpm_left_;  
-    double th_right_speed = th_motor_rpm_right_; 
+    double_t th_curvature = 0.0;
+    double_t th_radius   = 0.0;
+    double_t th_left_speed  = th_motor_rpm_left_;  
+    double_t th_right_speed = th_motor_rpm_right_; 
     if(fabs(th_left_speed) < 0.005)  th_left_speed = 0.0;
     if(fabs(th_right_speed) < 0.005) th_right_speed = 0.0;
     if( fabs(th_left_speed - th_right_speed) == 0.0 )
@@ -383,16 +381,162 @@ class Skid_Steering : public rclcpp::Node
     return th_curvature;
   }
 
-  double th_veh_linear_speed(void)
+  double_t th_veh_linear_speed(void)
   {
     return (th_Vx_l + th_Vx_r)/2;
   }
 
-  double th_veh_angular_speed(void)
+  double_t th_veh_angular_speed(void)
   {
     return (th_Vx_r - th_Vx_l)/trackWith_; // ToDo check (th_Vx_r - th_Vx_l)/(trackWicth_/2);
     // which should be the same as: steering_rate = ( (th_Vx_r + th_Vx_l)/2 )*trackWidth_)/ th_radius;
     // 
+  }
+  
+  void set_speed_and_radious_skid(double_t linear_speed, double_t radious)
+  {
+    double_t angular_speed = linear_speed/radious;
+    set_differential_steering_skid(linear_speed, angular_speed);
+  }
+
+  void set_differential_steering_skid(double_t linear_speed, double_t angular_speed)
+  {
+    // Vx = (Vr + Vl)/2; 
+    // Vr = Vx*2 - Vl
+    // Vl = Vx*2 - Vr
+    // dV = Vx*2
+    
+    // update linear speed -- really necesary?
+    double_t Vx   = (th_Vx_l + th_Vx_r)/2;
+
+    double_t dV_e = linear_speed - Vx;
+    double_t new_Vx_l = th_Vx_l + dV_e;
+    double_t new_Vx_r = th_Vx_r + dV_e;
+
+    // update turning speed
+    double_t isYawRate = (new_Vx_l - new_Vx_r);
+
+    double_t dYawRate_e = angular_speed - isYawRate;
+    double_t new_speed_left  = new_Vx_l + dYawRate_e/2.0;
+    double_t new_speed_right = new_Vx_r - dYawRate_e/2.0;
+    RCLCPP_INFO(this->get_logger(), "Thiemos: max_seed: %f; motor_limit_: %f; new_speed_left: %f; new_speed_right: %f, th_Vx_l: %f, th_Vx_r: %f", max_speed_, motor_limit_, new_speed_left, new_speed_right, th_Vx_l, th_Vx_r);
+
+    // alternative write directly the new value:
+    // Step 01 apply linear speed 
+    //new_Vx_l = linear_speed;
+    //new_Vx_r = linear_speed;
+
+    // Step 02 update the turning rate
+    new_speed_left  = linear_speed + angular_speed/2;
+    new_speed_right = linear_speed - angular_speed/2; 
+    RCLCPP_INFO(this->get_logger(), "Benjami: max_speed: %f; motor_limit_: %f; new_speed_left: %f; new_speed_right: %f", max_speed_, motor_limit_, new_speed_left, new_speed_right);
+    // when is the track with used?
+    uint16_t rc_left, rc_right;
+    mavros_msgs::msg::OverrideRCIn rcOverride;
+
+
+    rc_left  =  left_speed_2_rc(new_speed_left,  max_speed_);
+    rc_right = right_speed_2_rc(new_speed_right, max_speed_);
+
+    rcOverride.channels[LEFT] = rc_left;
+    rcOverride.channels[RIGHT] = rc_right;
+    this->rc_override_pub_->publish(rcOverride);
+
+  }
+
+  uint16_t left_speed_2_rc(double_t left_speed, double_t max_value)
+  {// the right sade begins to rotat at 29. do ideally both should be bigger thatn 29, or both should be 0 whne less than 29 which is 0.05 from 1.0
+   // lineal remap 
+    double_t low1  = -1*max_value;
+    double_t high1 = max_value;
+    double_t low2  = 1050;
+    double_t high2  = 1950;
+    uint16_t rc_left_linear{};
+    rc_left_linear = (uint16_t)(low2 + (left_speed - low1) * (high2 - low2) / (high1 - low1)); // or rc_left_linear
+
+    // curve calculation
+    double_t  x = left_speed/max_value;
+    double_t ux = fabs(left_speed/max_value);
+    double_t sign = x/ux;
+    uint16_t rc_left{};
+    double_t deadZone = 0.05;
+    uint16_t y{};
+    //if( ux > 0.994){ ux = 0.994;} // RCLCPP_INFO(this->get_logger(),"************ux is bigger");} /// creo que 0.988 es el mayor
+    if( ux > motor_limit_){ ux = motor_limit_;} // RCLCPP_INFO(this->get_logger(),"************ux is bigger");} /// creo que 0.988 es el mayor
+    if( ux < deadZone) rc_left = 1500;
+    else
+    {
+      bool rc_found = false;
+      //RCLCPP_INFO(this->get_logger(),"MAX value: %f; unsignd: %f",x,ux);
+      for(uint16_t i = 1 ; i<= 400; i++)
+      {
+        double_t rpm_left_percent = -5.832325307760911*pow(10,-14)*pow(i,5)+4.920713129609684*pow(10,-11)*pow(i,4)+1.029277435759187*pow(10,-8)*pow(i,3)-2.430456929159689*pow(10,-5)*pow(i,2)+9.378150682378419*pow(10,-3)*pow(i,1)-1.867135238096345*pow(10,-1);
+        //RCLCPP_INFO(this->get_logger(),"rpm_left_percent found: %f at RC: %d; bigger than: %f",rpm_left_percent,i,ux);
+        if( (rpm_left_percent >= ux)   && !rc_found )
+        {
+          //RCLCPP_INFO(this->get_logger(),"$$$$$$$$$$$$$$$$4 rpm_left_percent found: %f at RC: %d; bigger than: %f",rpm_left_percent,i,ux);
+          y = i;
+          rc_found = true;
+        }
+      }
+      rc_left = (uint16_t)(1500 + (sign*y));
+      //RCLCPP_INFO(this->get_logger()," y to be used: %d; and rc_left: %d",y,rc_left);
+    }
+    low1  = 1100;
+    high1 = 1900;
+    uint16_t rc_out{};
+
+    rc_out = (uint16_t)(low2 + (rc_left - low1) * (high2 - low2) / (high1 - low1)); // or rc_left_linear
+    if(rc_out < low2)  rc_out = low2;
+    if(rc_out > high2) rc_out = high2;
+
+    return rc_out;
+  }
+
+  uint16_t right_speed_2_rc(double_t right_speed, double_t max_value)
+  {
+    // linear map
+    double_t low1  = -1*max_value;
+    double_t high1 = max_value;
+    double_t low2  = 1050;
+    double_t high2  = 1950;
+    uint16_t rc_right_linear{};
+    rc_right_linear = (uint16_t)(low2 + (right_speed - low1) * (high2 - low2) / (high1 - low1)); // or rc_left_linear
+    
+    // curve calculation
+    // xp_r_6 = -2.3627e+09   1.3064e+10  -3.0647e+10   3.9561e+10  -3.0432e+10   1.4069e+10  -3.7221e+09   4.9110e+08  -2.2070e+07   2.4000e+01
+    double_t  x = right_speed/max_value;
+    double_t ux = fabs(right_speed/max_value);
+    double_t sign = x/ux;
+    uint16_t rc_right{};
+    double_t deadZone = 0.05;
+    uint16_t y{};
+    if( ux > motor_limit_){ ux = motor_limit_;} 
+    if( ux < deadZone) rc_right = 1500;
+    else
+    {
+      bool rc_found = false;
+      for(uint16_t i = 1 ; i<= 400; i++)
+      {
+        double_t rpm_right_percent = 3.942613160784577*pow(10,-14)*pow(i,5)-7.547772093367737*pow(10,-11)*pow(i,4)+6.600020035107555*pow(10,-8)*pow(i,3)-3.477702363777966*pow(10,-5)*pow(i,2)+1.020791539102076*pow(10,-2)*pow(i,1)-2.176141967499420*pow(10,-1);
+        if( (rpm_right_percent >= ux) && !rc_found)
+        {
+          //RCLCPP_INFO(this->get_logger(),"rpm_right_percent found: %f at RC: %d",rpm_right_percent,i);
+          y = i;
+          rc_found = true;
+        }
+      }
+      rc_right = (uint16_t)(1500 + ((sign)*y));
+    }
+    low1  = 1100;
+    high1 = 1900;
+    uint16_t rc_out{};
+
+    rc_out = (uint16_t)(low2 + (rc_right - low1) * (high2 - low2) / (high1 - low1)); // or rc_right_linear
+    if(rc_out < low2)  rc_out = low2;
+    if(rc_out > high2) rc_out = high2;
+
+    return rc_out;
   }
 
   void raw_servo_callback (const mavros_msgs::msg::RCOut msg) 
@@ -416,8 +560,18 @@ class Skid_Steering : public rclcpp::Node
 
     th_Vx_ = th_veh_linear_speed();
     th_w_  = th_veh_angular_speed();
+    slip_ = th_Vx_ - ground_speed_;
     this->th_Vx_pub_->publish(std_msgs::build<std_msgs::msg::Float64>().data(th_Vx_));
     this->th_w_pub_->publish(std_msgs::build<std_msgs::msg::Float64>().data(th_w_));
+    this->slip_pub_->publish(std_msgs::build<std_msgs::msg::Float64>().data(slip_));
+
+  }
+
+  void vfr_callback( const mavros_msgs::msg::VfrHud msg)
+  {
+    ground_speed_ = msg.groundspeed;
+    slip_ = th_Vx_ - ground_speed_;
+    //RCLCPP_INFO(this->get_logger(),"th_Vx: %f; ground_seed: %f; slip: %f",th_Vx_,ground_speed_,slip_);
   }
 
   void call_async_get_pilot_steer_type()
@@ -425,24 +579,26 @@ class Skid_Steering : public rclcpp::Node
     while(!client_get_parameters_->wait_for_service(1s)){
       if (!rclcpp::ok()){
         RCLCPP_ERROR(
-          this->get_logger(), "Client interrumped while waiting for service. Terminating...");
+          this->get_logger(), "[call_async_get_pilot_steer_type] Client interrumped while waiting for service. Terminating...");
         return;
       }
-      RCLCPP_INFO(this->get_logger(), "Service '%s' Unavailable. Waiting for service... ", std::string(client_get_parameters_->get_service_name()).c_str());
+      RCLCPP_INFO(this->get_logger(), "[call_async_get_pilot_steer_type] Service '%s' Unavailable. Waiting for service... ", std::string(client_get_parameters_->get_service_name()).c_str());
     }
-    RCLCPP_INFO(this->get_logger(), "Service '%s' will be called async... ", client_get_parameters_->get_service_name());
+    RCLCPP_INFO(this->get_logger(), "[call_async_get_pilot_steer_type] Service '%s' will be called async... ", client_get_parameters_->get_service_name());
 
     auto request = std::make_shared<rcl_interfaces::srv::GetParameters::Request>();
     request->names.push_back("PILOT_STEER_TYPE");  // ToDo, perhaps first ask the type of values, and check if PILOT_STEER_TYPE exist
-    RCLCPP_INFO(this->get_logger(), "Sending request to check PILOT_STEER_TYPE ");
+    RCLCPP_INFO(this->get_logger(), "[call_async_get_pilot_steer_type] Sending request to check PILOT_STEER_TYPE ");
 
+    RCLCPP_INFO(this->get_logger(),"[call_async_get_pilot_steert_type] before");
     auto result = client_get_parameters_->async_send_request(request, std::bind(&Skid_Steering::get_parameters_response_received_callback, this, std::placeholders::_1));
+    RCLCPP_INFO(this->get_logger(),"[call_async_get_pilot_steert_type] after ");
   }
 
   void get_parameters_response_received_callback (rclcpp::Client<rcl_interfaces::srv::GetParameters>::SharedFuture future) 
   {
     auto result = future.get();
-    RCLCPP_INFO(this->get_logger(), "Result arrived... size: %ld, type: %o, value: %ld (%s). ", result->values.size(), result->values[0].type, result->values[0].integer_value,to_string(result->values[0].integer_value).c_str());
+    RCLCPP_INFO(this->get_logger(), "[>***< get_parameters_response_received_callback] Result arrived... size: %ld, type: %o, value: %ld (%s). ", result->values.size(), result->values[0].type, result->values[0].integer_value,to_string(result->values[0].integer_value).c_str());
     current_pilot_steer_type = result->values[0].integer_value;
     response_get_pilot_steer_type_received = true;
     if(current_pilot_steer_type == 1)
@@ -458,10 +614,10 @@ class Skid_Steering : public rclcpp::Node
     while(!client_set_parameters_->wait_for_service(1s)){
       if (!rclcpp::ok()){
         RCLCPP_ERROR(
-          this->get_logger(), "Client interrumped while waiting for service %s. Terminating...",client_set_parameters_->get_service_name());
+          this->get_logger(), "[call_async_set_pilot_steer_type] Client interrumped while waiting for service %s. Terminating...",client_set_parameters_->get_service_name());
         return;
       }
-      RCLCPP_INFO(this->get_logger(), "Service '%s' Unavailable. Waiting for service... ", std::string(client_set_parameters_->get_service_name()).c_str());
+      RCLCPP_INFO(this->get_logger(), "[call_async_set_pilot_steer_type] Service '%s' Unavailable. Waiting for service... ", std::string(client_set_parameters_->get_service_name()).c_str());
     }
 
     auto request = std::make_shared<rcl_interfaces::srv::SetParameters::Request>();
@@ -472,7 +628,7 @@ class Skid_Steering : public rclcpp::Node
 
     request->parameters.push_back(_desired_pilot_steer_type);
 
-    RCLCPP_INFO(this->get_logger(), "Service '%s' will be called async to change PILOT_STEER_TYPE from '%s' to '%s'... ", client_set_parameters_->get_service_name(), to_string(current_pilot_steer_type).c_str(), to_string(desired_pilot_steer_type).c_str());
+    RCLCPP_INFO(this->get_logger(), "[call_async_set_pilot_steer_type] Service '%s' will be called async to change PILOT_STEER_TYPE from '%s' to '%s'... ", client_set_parameters_->get_service_name(), to_string(current_pilot_steer_type).c_str(), to_string(desired_pilot_steer_type).c_str());
 
     auto result = client_set_parameters_->async_send_request(request, std::bind(&Skid_Steering::set_parameters_response_received_callback, this, std::placeholders::_1));
 
@@ -481,7 +637,7 @@ class Skid_Steering : public rclcpp::Node
   void set_parameters_response_received_callback (rclcpp::Client<rcl_interfaces::srv::SetParameters>::SharedFuture future) 
   {
     auto result = future.get();
-    RCLCPP_INFO(this->get_logger(), "set_parameters sesult arrived with success: %d, reason: '%s'. ", result->results[0].successful, result->results[0].reason.c_str());
+    RCLCPP_INFO(this->get_logger(), "[set_parameter_response_received_callback] sesult arrived with success: %d, reason: '%s'. ", result->results[0].successful, result->results[0].reason.c_str());
     response_set_pilot_steer_type_received = true;
 
     response_get_pilot_steer_type_received = false;

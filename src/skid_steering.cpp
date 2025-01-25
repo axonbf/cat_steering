@@ -15,6 +15,7 @@
 #include <mavros_msgs/srv/param_set.hpp>
 #include <mavros_msgs/srv/param_set_v2.hpp>
 #include <mavros_msgs/srv/param_get.hpp>
+#include <mavros_msgs/srv/set_mode.hpp>
 #include <rcl_interfaces/srv/set_parameters.hpp>
 #include <rcl_interfaces/srv/get_parameters.hpp>
 #include <vector>
@@ -142,6 +143,7 @@ class Skid_Steering : public rclcpp::Node
         if( response_set_pilot_steer_type_received == true)
         {
           response_set_pilot_steer_type_received = false;
+          call_async_set_manual_mode(); // Setting manual mode
           call_async_set_pilot_steer_type(desired_pilot_steer_type); //***
         }
       }
@@ -216,6 +218,8 @@ class Skid_Steering : public rclcpp::Node
     client_get_parameters_       = this->create_client<rcl_interfaces::srv::GetParameters>("mavros/param/get_parameters");
     client_set_parameters_       = this->create_client<rcl_interfaces::srv::SetParameters>("mavros/param/set_parameters");
 
+    client_set_mode_             = this->create_client<mavros_msgs::srv::SetMode>("mavros/set_mode");
+
     // Timers
     timer_                       = this->create_wall_timer(1s, timer_callback);
     str_timer_                   = this->create_wall_timer(50ms, str_timer_callback);
@@ -242,6 +246,8 @@ class Skid_Steering : public rclcpp::Node
   
   rclcpp::Client<rcl_interfaces::srv::GetParameters>::SharedPtr client_get_parameters_; // td_srvs::srv::SetBoll>::SharedPtr client_;
   rclcpp::Client<rcl_interfaces::srv::SetParameters>::SharedPtr client_set_parameters_; // td_srvs::srv::SetBoll>::SharedPtr client_;
+
+  rclcpp::Client<mavros_msgs::srv::SetMode>::SharedPtr client_set_mode_; 
 
   rclcpp::TimerBase::SharedPtr timer_;
   rclcpp::TimerBase::SharedPtr str_timer_;
@@ -560,7 +566,7 @@ class Skid_Steering : public rclcpp::Node
 
     th_Vx_ = th_veh_linear_speed();
     th_w_  = th_veh_angular_speed();
-    slip_ = th_Vx_ - ground_speed_;
+    slip_ = (th_Vx_ - ground_speed_)/th_Vx_; // ToDo: make a get funtion
     this->th_Vx_pub_->publish(std_msgs::build<std_msgs::msg::Float64>().data(th_Vx_));
     this->th_w_pub_->publish(std_msgs::build<std_msgs::msg::Float64>().data(th_w_));
     this->slip_pub_->publish(std_msgs::build<std_msgs::msg::Float64>().data(slip_));
@@ -570,7 +576,8 @@ class Skid_Steering : public rclcpp::Node
   void vfr_callback( const mavros_msgs::msg::VfrHud msg)
   {
     ground_speed_ = msg.groundspeed;
-    slip_ = th_Vx_ - ground_speed_;
+    slip_ = (th_Vx_ - ground_speed_)/th_Vx_;
+
     //RCLCPP_INFO(this->get_logger(),"th_Vx: %f; ground_seed: %f; slip: %f",th_Vx_,ground_speed_,slip_);
   }
 
@@ -634,6 +641,29 @@ class Skid_Steering : public rclcpp::Node
 
   }
 
+  void call_async_set_manual_mode()
+  {
+    while(!client_set_mode_->wait_for_service(1s)){
+      if (!rclcpp::ok()){
+        RCLCPP_ERROR(
+          this->get_logger(), "[call_async_set_manual_mode] Client interrumped while waiting for service %s. Terminating...",client_set_mode_->get_service_name());
+        return;
+      }
+      RCLCPP_INFO(this->get_logger(), "[call_async_set_manual_mode] Service '%s' Unavailable. Waiting for service... ", std::string(client_set_mode_->get_service_name()).c_str());
+    }
+
+    auto request = std::make_shared<mavros_msgs::srv::SetMode::Request>();
+    request->custom_mode = "MANUAL";
+
+    auto result = client_set_mode_->async_send_request(request, std::bind(&Skid_Steering::set_manual_mode_response_callback,          this, std::placeholders::_1));
+  }
+
+  void set_manual_mode_response_callback(rclcpp::Client<mavros_msgs::srv::SetMode>::SharedFuture future)
+  {
+    auto result = future.get();
+    RCLCPP_INFO(this->get_logger(), "[set_manual_mode_response_callback] sesult arrived with success: %d. ", result->mode_sent);
+  }
+
   void set_parameters_response_received_callback (rclcpp::Client<rcl_interfaces::srv::SetParameters>::SharedFuture future) 
   {
     auto result = future.get();
@@ -643,6 +673,12 @@ class Skid_Steering : public rclcpp::Node
     response_get_pilot_steer_type_received = false;
     call_async_get_pilot_steer_type();
   }
+
+  //void set_mode_response_received_callback(rclcpp::Client<mavros_msgs::srv::SetMode>::SharedFuture future)
+  //{
+  //  auto result = future.get();
+  //  RCLCPP_INFO(this->get_logger(), "[set_mode_response_received_callback] sesult arrived with success: %d, reason: '%s'. ", result->results[0].successful, result->results[0].reason.c_str());
+  //}
 
 
   std::string const & to_string(int _type)

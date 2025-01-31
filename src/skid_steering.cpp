@@ -190,8 +190,12 @@ class Skid_Steering : public rclcpp::Node
     vfr_sub_           = this->create_subscription<mavros_msgs::msg::VfrHud>      ("/mavros/vfr_hud",rclcpp::SensorDataQoS(), std::bind(&Skid_Steering::vfr_callback      ,this,_1));
 
     //general functions
-    double_t th_motor_rpm_left(uint16_t rc_in_left);
-    double_t th_motor_rpm_right(uint16_t rc_in_right);
+    double_t servo2percent_left(uint16_t rc_in_left);
+    double_t percent2rpm_left(double_t rpm_left_percent);
+
+    double_t servo2percent_right(uint16_t rc_in_right);
+    double_t percent2rpm_right(double_t rpm_right_percent);
+
     double_t th_curvature(void);
     double_t th_motor_linear_speed_left (void);
     double_t th_motor_linear_speed_right(void);
@@ -305,7 +309,7 @@ class Skid_Steering : public rclcpp::Node
 
   float trackWith_ = 0.28; // 28 [cm]
 
-  double_t th_motor_rpm_left (uint16_t rc_in_left)
+  double_t servo2percent_left (uint16_t rc_in_left)
   {
     // ToDo -> utils calculate sign
     // RC   % = |   1559 |   1560 |   1564 |   1600 |   1700 |   1800 |   1900 |   1950 |
@@ -317,14 +321,21 @@ class Skid_Steering : public rclcpp::Node
     if( ((0 < ux ) && (ux < 28)) || (ux == 0) ) rpm_left_percent = 0.0;
     else rpm_left_percent = rpm_left_percent*(double_t)(x/ux);
 
-    double_t rpm_left = battery_voltage*Kv_left*rpm_left_percent;
+    //double_t rpm_left = battery_voltage*Kv_left*rpm_left_percent;
     //RCLCPP_INFO(this->get_logger(), "rc_in_left: %d; rpm_percent_left: %f; rpm_left: %f",ux,rpm_left_percent,rpm_left );
     //RCLCPP_INFO(this->get_logger(), " ux: %d; 5.5110e-21*x^9: %f;  -1.0048e-17*x^8: %f;  7.6943e-15*x^7: %f;  -3.2069e-12*x^6: %f;   7.8690e-10*x^5: %f;  -1.1463e-07*x^4: %f;   9.5073e-06*x^3: %f;  -4.2487e-04*x^2: %f;   1.6236e-02*x^1: %f;  -2.1602e-01: %f;",
     //xx,5.5110*pow(10,-21)*pow(xx,9),-1.0048*pow(10,-17)*pow(xx,8),7.6943*pow(10,-15)*pow(xx,7),-3.2069*pow(10,-12)*pow(xx,6),+7.8690*pow(10,-10)*pow(xx,5),-1.1463*pow(10,-7)*pow(xx,4),+9.5073*pow(10,-6)*pow(xx,3),-4.2487*pow(10,-4)*pow(xx,2),+1.6236*pow(10,-2)*pow(xx,1),-2.1602*pow(10,-1));
-    return rpm_left;
+    //return rpm_left;
+    return rpm_left_percent;
   }
 
-  double_t th_motor_rpm_right (uint16_t rc_in_right)
+  double_t percent2rpm_left(double_t rpm_left_percent)
+  {
+    //double_t rpm_left = battery_voltage*Kv_left*rpm_left_percent;
+    return battery_voltage*Kv_left*rpm_left_percent;
+  }
+
+  double_t servo2percent_right (uint16_t rc_in_right)
   {
     // RC   % = |   1559 |   1560 |   1564 |   1600 |   1700 |   1800 |   1900 |   1950 |
     // rpms % = | 0.0000 | 0.0000 | 0.0874 | 0.3150 | 0.7592 | 0.9563 | 0.9949 | 1.0000 |
@@ -335,14 +346,21 @@ class Skid_Steering : public rclcpp::Node
     if( ((0 < ux ) && (ux < 28)) || (ux == 0) ) rpm_right_percent = 0.0;
     else rpm_right_percent = rpm_right_percent*(x/ux);
 
-    double_t rpm_right = battery_voltage*Kv_right*rpm_right_percent;
+    //double_t rpm_right = battery_voltage*Kv_right*rpm_right_percent;
     //RCLCPP_INFO(this->get_logger(), "rc_in_right: %d; rpm_percent_right: %f; rpm_right: %f",ux,rpm_right_percent,rpm_right );
-    return rpm_right;
+    //return rpm_right;
+    return rpm_right_percent;
+  }
+
+  double_t percent2rpm_right(double_t rpm_right_percent)
+  {
+    return battery_voltage*Kv_right*rpm_right_percent;
   }
 
   double_t th_motor_linear_speed_left(void)
   {
     // V = [RPM x PP x (1- S) x GR] / 60 
+    // V = ( Kv * Volgate * DuttyCycle * PP * (1-slipage) * Gear ) / 60
     //  float_t servo_left_percent  = (servo_raw_left-1500)/400.0; // from 1100 to 1900
     //  float_t mot_rpm_th_l = Kv_left*battery_voltage*servo_left_percent;
     //  th_Vx_l = mot_rpm_th_l/60 * prop_p;
@@ -425,7 +443,7 @@ class Skid_Steering : public rclcpp::Node
     double_t dYawRate_e = angular_speed - isYawRate;
     double_t new_speed_left  = new_Vx_l + dYawRate_e/2.0;
     double_t new_speed_right = new_Vx_r - dYawRate_e/2.0;
-    RCLCPP_INFO(this->get_logger(), "Thiemos: max_seed: %f; motor_limit_: %f; new_speed_left: %f; new_speed_right: %f, th_Vx_l: %f, th_Vx_r: %f", max_speed_, motor_limit_, new_speed_left, new_speed_right, th_Vx_l, th_Vx_r);
+    //**RCLCPP_INFO(this->get_logger(), "Thiemos: max_seed: %f; motor_limit_: %f; new_speed_left: %f; new_speed_right: %f, th_Vx_l: %f, th_Vx_r: %f", max_speed_, motor_limit_, new_speed_left, new_speed_right, th_Vx_l, th_Vx_r);
 
     // alternative write directly the new value:
     // Step 01 apply linear speed 
@@ -435,7 +453,7 @@ class Skid_Steering : public rclcpp::Node
     // Step 02 update the turning rate
     new_speed_left  = linear_speed + angular_speed/2;
     new_speed_right = linear_speed - angular_speed/2; 
-    RCLCPP_INFO(this->get_logger(), "Benjami: max_speed: %f; motor_limit_: %f; new_speed_left: %f; new_speed_right: %f", max_speed_, motor_limit_, new_speed_left, new_speed_right);
+    //**RCLCPP_INFO(this->get_logger(), "Benjami: max_speed: %f; motor_limit_: %f; new_speed_left: %f; new_speed_right: %f", max_speed_, motor_limit_, new_speed_left, new_speed_right);
     // when is the track with used?
     uint16_t rc_left, rc_right;
     mavros_msgs::msg::OverrideRCIn rcOverride;
@@ -446,8 +464,10 @@ class Skid_Steering : public rclcpp::Node
 
     rcOverride.channels[LEFT] = rc_left;
     rcOverride.channels[RIGHT] = rc_right;
-    this->rc_override_pub_->publish(rcOverride);
 
+    RCLCPP_INFO(this->get_logger(), "[set_differential_steering_skid]: Desired  RC_Out_left: %d; RC_Out_right: %d", rc_left, rc_right);
+    RCLCPP_INFO(this->get_logger(), "[raw_servo_callback]:             Received RC_Out_left: %d; RC_Out_right: %d, left_speed: %f; right_speed: %f",servo_raw_left, servo_raw_right,th_Vx_l,th_Vx_r);
+    this->rc_override_pub_->publish(rcOverride);
   }
 
   uint16_t left_speed_2_rc(double_t left_speed, double_t max_value)
@@ -493,6 +513,8 @@ class Skid_Steering : public rclcpp::Node
     uint16_t rc_out{};
 
     rc_out = (uint16_t)(low2 + (rc_left - low1) * (high2 - low2) / (high1 - low1)); // or rc_left_linear
+    //**** chieca aqui ToDo */
+    RCLCPP_INFO(this->get_logger()," rc_left: %d; rc_out: %d; desired speed: %f", rc_left, rc_out,left_speed);
     if(rc_out < low2)  rc_out = low2;
     if(rc_out > high2) rc_out = high2;
 
@@ -549,9 +571,13 @@ class Skid_Steering : public rclcpp::Node
   {
     servo_raw_left  = msg.channels[LEFT];
     servo_raw_right = msg.channels[RIGHT];
-    //RCLCPP_INFO(this->get_logger(), "servo_left: %d; servo_right: %d",servo_raw_left, servo_raw_right);
-    th_motor_rpm_left_  = th_motor_rpm_left (servo_raw_left);
-    th_motor_rpm_right_ = th_motor_rpm_right(servo_raw_right);
+    //**RCLCPP_INFO(this->get_logger(), "[raw_servo_callback]:             Received RC_Out_left: %d; RC_Out_right: %d",servo_raw_left, servo_raw_right);
+    //**RCLCPP_INFO(this->get_logger(), "[set_differential_steering_skid]: Desired  RC_Out_left: %d; RC_Out_right: %d", rc_left, rc_right);
+    //th_motor_rpm_left_  = servo2percent_left (servo_raw_left);
+    //th_motor_rpm_right_ = servo2percent_right(servo_raw_right);
+    th_motor_rpm_left_  = percent2rpm_left(servo2percent_left (servo_raw_left));
+    th_motor_rpm_right_ = percent2rpm_right(servo2percent_right(servo_raw_right));
+
     this->th_rpm_left_pub_ ->publish(std_msgs::build<std_msgs::msg::Float64>().data(th_motor_rpm_left_ ));
     this->th_rpm_right_pub_->publish(std_msgs::build<std_msgs::msg::Float64>().data(th_motor_rpm_right_));
 

@@ -192,13 +192,27 @@ class Skid_Steering : public rclcpp::Node
     //general functions
     double_t servo2percent_left(uint16_t rc_in_left);
     double_t percent2rpm_left(double_t rpm_left_percent);
+    double_t rpm2speed_left (double_t rpm_left);
+    ///////
+    double_t speed2rpm_left(double_t speed_left);
+    double_t rpm2percent_left(double_t rpm_left);
+    double_t percent2servo_left(double_t rpm_left_percent);
+    uint16_t servo2rc_left(double_t servo_left); // since RC is the output that I am sending e.g. rc=1950
 
-    double_t servo2percent_right(uint16_t rc_in_right);
+    double_t servo2percent_right(uint16_t rc_in_right);     // and servo is what a read, e.g. servo=1900 and rc=1950
     double_t percent2rpm_right(double_t rpm_right_percent);
+    double_t rpm2speed_right(double_t rpm_right);
+    ///////
+    double_t speed2rpm_right(double_t speed_right);
+    double_t rpm2percent_right(double_t rpm_right);
+    double_t percent2servo_right(double_t rpm_right_percent);
+    uint16_t servo2rc_right(double_t servo_right); // since RC is the output that I am sending e.g. rc=1950
+
+    //uint16_t rc2servo_right(double_t rc_right);
 
     double_t th_curvature(void);
-    double_t th_motor_linear_speed_left (void);
-    double_t th_motor_linear_speed_right(void);
+    //double_t th_motor_linear_speed_left (void);
+
     double_t th_veh_linear_speed(void);
     double_t th_veh_angular_speed(void);
     void     set_differential_steering_skid(double_t linear_speed, double_t angular_speed);
@@ -335,6 +349,97 @@ class Skid_Steering : public rclcpp::Node
     return battery_voltage*Kv_left*rpm_left_percent;
   }
 
+  double_t rpm2speed_left(double_t rpm_left)
+  {
+    // V = [RPM x PP x (1- S) x GR] / 60 
+    // V = ( Kv * Volgate * DuttyCycle * PP * (1-slipage) * Gear ) / 60
+    //  float_t servo_left_percent  = (servo_raw_left-1500)/400.0; // from 1100 to 1900
+    //  float_t mot_rpm_th_l = Kv_left*battery_voltage*servo_left_percent;
+    //  th_Vx_l = mot_rpm_th_l/60 * prop_p;
+    //double_t linear_speed_left = th_motor_rpm_left_/60*prop_p;
+    double_t linear_speed_left = rpm_left/60*prop_p;
+    return linear_speed_left;
+  }
+
+  double_t speed2rpm_left(double_t speed_left)
+  {
+    // V = [RPM x PP x (1- S) x GR] / 60 
+    // V = ( Kv * Volgate * DuttyCycle * PP * (1-slipage) * Gear ) / 60
+    //  float_t servo_left_percent  = (servo_raw_left-1500)/400.0; // from 1100 to 1900
+    //  float_t mot_rpm_th_l = Kv_left*battery_voltage*servo_left_percent;
+    //  th_Vx_l = mot_rpm_th_l/60 * prop_p;
+    //double_t linear_speed_left = th_motor_rpm_left_/60*prop_p;
+    //double_t linear_speed_left = rpm_left/60*prop_p;
+    double_t rpm_left{};
+    if( fabs(prop_p) < 0.001) rpm_left = 0.0;
+    else rpm_left = speed_left*60/prop_p;
+    return rpm_left;
+  }
+
+  double_t rpm2percent_left(double_t rpm_left)
+  {
+    //double_t rpm_left = battery_voltage*Kv_left*rpm_left_percent;
+    if ( fabs(battery_voltage*Kv_left) < 0.001) return 0.0;
+    else return (rpm_left/ (battery_voltage*Kv_left));
+  }
+
+  double_t percent2servo_left(double_t rpm_left_percent)
+  {
+
+
+    // curve calculation
+    double_t  x = rpm_left_percent;
+    double_t ux = fabs(x);
+    double_t sign = x/ux;
+    uint16_t servo_left{};
+    double_t deadZone = 0.05;
+    uint16_t y{};
+    //if( ux > 0.994){ ux = 0.994;} // RCLCPP_INFO(this->get_logger(),"************ux is bigger");} /// creo que 0.988 es el mayor
+    if( ux > motor_limit_){ ux = motor_limit_;} // RCLCPP_INFO(this->get_logger(),"************ux is bigger");} /// creo que 0.988 es el mayor
+    if( ux < deadZone) servo_left = 1500;
+    else
+    {
+      bool rc_found = false;
+      //RCLCPP_INFO(this->get_logger(),"MAX value: %f; unsignd: %f",x,ux);
+      for(uint16_t i = 1 ; i<= 400; i++)
+      {
+        double_t rpm_left_percent = -5.832325307760911*pow(10,-14)*pow(i,5)+4.920713129609684*pow(10,-11)*pow(i,4)+1.029277435759187*pow(10,-8)*pow(i,3)-2.430456929159689*pow(10,-5)*pow(i,2)+9.378150682378419*pow(10,-3)*pow(i,1)-1.867135238096345*pow(10,-1);
+        //RCLCPP_INFO(this->get_logger(),"rpm_left_percent found: %f at RC: %d; bigger than: %f",rpm_left_percent,i,ux);
+        if( (rpm_left_percent >= ux)   && !rc_found )
+        {
+          //RCLCPP_INFO(this->get_logger(),"$$$$$$$$$$$$$$$$4 rpm_left_percent found: %f at RC: %d; bigger than: %f",rpm_left_percent,i,ux);
+          y = i;
+          rc_found = true;
+        }
+      }
+      servo_left = (uint16_t)(1500 + (sign*y));
+      //RCLCPP_INFO(this->get_logger()," y to be used: %d; and servo_left: %d",y,servo_left);
+    }
+
+    return servo_left;
+  }
+
+  uint16_t servo2rc_left(double_t servo_left)
+  {
+
+    double_t low1  = 1100;
+    double_t high1 = 1900;
+    double_t low2  = 1050;
+    double_t high2  = 1950;
+    uint16_t rc_out{};
+
+    rc_out = (uint16_t)(low2 + (servo_left - low1) * (high2 - low2) / (high1 - low1)); // or rc_left_linear
+    //**** checa aqui ToDo */
+    RCLCPP_INFO(this->get_logger(),"[servo2rc_left] servo_left: %f; rc_out: %d; ", servo_left, rc_out);
+    if(rc_out < low2)  rc_out = low2;
+    if(rc_out > high2) rc_out = high2;
+
+    return rc_out;
+  }
+
+  /// @brief This function reprecents the basic percen fo the servo input 
+  /// @param rc_in_right 
+  /// @return rpm_right_percent
   double_t servo2percent_right (uint16_t rc_in_right)
   {
     // RC   % = |   1559 |   1560 |   1564 |   1600 |   1700 |   1800 |   1900 |   1950 |
@@ -357,25 +462,83 @@ class Skid_Steering : public rclcpp::Node
     return battery_voltage*Kv_right*rpm_right_percent;
   }
 
-  double_t th_motor_linear_speed_left(void)
+  double_t rpm2percent_right(double_t rpm_right)
+  {
+    //double_t rpm_left = battery_voltage*Kv_left*rpm_left_percent;
+    if ( fabs(battery_voltage*Kv_right) < 0.001) return 0.0;
+    else return (rpm_right/ (battery_voltage*Kv_right));
+  }
+
+  double_t percent2servo_right(double_t rpm_right_percent)
+  {
+    // curve calculation
+    // xp_r_6 = -2.3627e+09   1.3064e+10  -3.0647e+10   3.9561e+10  -3.0432e+10   1.4069e+10  -3.7221e+09   4.9110e+08  -2.2070e+07   2.4000e+01
+    double_t  x = rpm_right_percent;
+    double_t ux = fabs(x);
+    double_t sign = x/ux;
+    uint16_t servo_right{};
+    double_t deadZone = 0.05;
+    uint16_t y{};
+    if( ux > motor_limit_){ ux = motor_limit_;} 
+    if( ux < deadZone) servo_right = 1500;
+    else
+    {
+      bool rc_found = false;
+      for(uint16_t i = 1 ; i<= 400; i++)
+      {
+        double_t rpm_right_percent = 3.942613160784577*pow(10,-14)*pow(i,5)-7.547772093367737*pow(10,-11)*pow(i,4)+6.600020035107555*pow(10,-8)*pow(i,3)-3.477702363777966*pow(10,-5)*pow(i,2)+1.020791539102076*pow(10,-2)*pow(i,1)-2.176141967499420*pow(10,-1);
+        if( (rpm_right_percent >= ux) && !rc_found)
+        {
+          //RCLCPP_INFO(this->get_logger(),"rpm_right_percent found: %f at RC: %d",rpm_right_percent,i);
+          y = i;
+          rc_found = true;
+        }
+      }
+      servo_right = (uint16_t)(1500 + ((sign)*y));
+    }
+
+    return servo_right;
+  }
+
+  uint16_t servo2rc_right(double_t servo_right)
+  {
+    // linear map
+    double_t low1  = 1100;// -1*max_value;
+    double_t high1 = 1900;// max_value;
+    double_t low2  = 1050;
+    double_t high2  = 1950;
+    uint16_t rc_out{};
+
+    rc_out = (uint16_t)(low2 + (servo_right - low1) * (high2 - low2) / (high1 - low1)); // or rc_right_linear
+    if(rc_out < low2)  rc_out = low2;
+    if(rc_out > high2) rc_out = high2;
+
+    return rc_out;
+  }
+
+  double_t rpm2speed_right(double_t rpm_right)
+  { 
+    // V = [RPM x PP x (1- S) x GR] / 60 
+    //  float_t servo_right_percent = (servo_raw_right-1500)/400.0; // from 1100 to 1900
+    //  float_t mot_rpm_th_r = Kv_right*battery_voltage*servo_right_percent; //Kv*Voltage;
+    //  th_Vx_r = mot_rpm_th_r/60 * prop_p;
+    double_t linear_speed_right = rpm_right/60*prop_p; 
+    return linear_speed_right;
+  }
+
+  double_t speed2rpm_right(double_t speed_right)
   {
     // V = [RPM x PP x (1- S) x GR] / 60 
     // V = ( Kv * Volgate * DuttyCycle * PP * (1-slipage) * Gear ) / 60
     //  float_t servo_left_percent  = (servo_raw_left-1500)/400.0; // from 1100 to 1900
     //  float_t mot_rpm_th_l = Kv_left*battery_voltage*servo_left_percent;
     //  th_Vx_l = mot_rpm_th_l/60 * prop_p;
-    double_t linear_speed_left = th_motor_rpm_left_/60*prop_p;
-    return linear_speed_left;
-  }
-
-  double_t th_motor_linear_speed_right(void)
-  { 
-    // V = [RPM x PP x (1- S) x GR] / 60 
-    //  float_t servo_right_percent = (servo_raw_right-1500)/400.0; // from 1100 to 1900
-    //  float_t mot_rpm_th_r = Kv_right*battery_voltage*servo_right_percent; //Kv*Voltage;
-    //  th_Vx_r = mot_rpm_th_r/60 * prop_p;
-    double_t linear_speed_right = th_motor_rpm_right_/60*prop_p; 
-    return linear_speed_right;
+    //double_t linear_speed_left = th_motor_rpm_left_/60*prop_p;
+    //double_t linear_speed_left = rpm_left/60*prop_p;
+    double_t rpm_right{};
+    if( fabs(prop_p) < 0.001) rpm_right = 0.0;
+    else rpm_right = speed_right*60/prop_p;
+    return rpm_right;
   }
 
   double_t th_curvature(void)
@@ -458,21 +621,32 @@ class Skid_Steering : public rclcpp::Node
     uint16_t rc_left, rc_right;
     mavros_msgs::msg::OverrideRCIn rcOverride;
 
+    // Error is that I am producing a percent based on the max speed allowed. That should not be the case.
+    // I should calculate the rpms, and if then if the go above the allowed values, then set a limit
+    // alternatively, I should calculate up to the rc and set the max value, 
+    // I could also set the max at the sepeed,....
+    //***rc_left  =  left_speed_2_rc(new_speed_left,  max_speed_);
+    //***rc_right = right_speed_2_rc(new_speed_right, max_speed_);
+    if(new_speed_left  >  max_speed_) new_speed_left  =  max_speed_;
+    if(new_speed_left  < -max_speed_) new_speed_left  = -max_speed_;
+    if(new_speed_right >  max_speed_) new_speed_right =  max_speed_;
+    if(new_speed_right < -max_speed_) new_speed_right = -max_speed_;
 
-    rc_left  =  left_speed_2_rc(new_speed_left,  max_speed_);
-    rc_right = right_speed_2_rc(new_speed_right, max_speed_);
+    rc_left  = servo2rc_left( percent2servo_left (rpm2percent_left( speed2rpm_left (new_speed_left)))); 
+    rc_right = servo2rc_right(percent2servo_right(rpm2percent_right(speed2rpm_right(new_speed_right))));
 
     rcOverride.channels[LEFT] = rc_left;
     rcOverride.channels[RIGHT] = rc_right;
 
-    RCLCPP_INFO(this->get_logger(), "[set_differential_steering_skid]: Desired  RC_Out_left: %d; RC_Out_right: %d", rc_left, rc_right);
-    RCLCPP_INFO(this->get_logger(), "[raw_servo_callback]:             Received RC_Out_left: %d; RC_Out_right: %d, left_speed: %f; right_speed: %f",servo_raw_left, servo_raw_right,th_Vx_l,th_Vx_r);
+    RCLCPP_INFO(this->get_logger(), "[raw_servo_callback]:             Readed  Servo_left: %d; Servo_right: %d,   is_speed_left: %f;   is_speed_right: %f",servo_raw_left, servo_raw_right,        th_Vx_l,         th_Vx_r);
+    RCLCPP_INFO(this->get_logger(), "[set_differential_steering_skid]: Desired    RC_left: %d;    RC_right: %d, soll_speed_left: %f; soll_speed_right: %f",       rc_left,        rc_right, new_speed_left, new_speed_right);
     this->rc_override_pub_->publish(rcOverride);
   }
 
   uint16_t left_speed_2_rc(double_t left_speed, double_t max_value)
   {// the right sade begins to rotat at 29. do ideally both should be bigger thatn 29, or both should be 0 whne less than 29 which is 0.05 from 1.0
    // lineal remap 
+   // ToDo make a function for a linear converstion if needed
     double_t low1  = -1*max_value;
     double_t high1 = max_value;
     double_t low2  = 1050;
@@ -581,8 +755,9 @@ class Skid_Steering : public rclcpp::Node
     this->th_rpm_left_pub_ ->publish(std_msgs::build<std_msgs::msg::Float64>().data(th_motor_rpm_left_ ));
     this->th_rpm_right_pub_->publish(std_msgs::build<std_msgs::msg::Float64>().data(th_motor_rpm_right_));
 
-    th_Vx_l = th_motor_linear_speed_left ();
-    th_Vx_r = th_motor_linear_speed_right();
+    th_Vx_l = rpm2speed_left (th_motor_rpm_left_);
+    th_Vx_r = rpm2speed_right(th_motor_rpm_right_);
+
     this->th_Vl_pub_->publish(std_msgs::build<std_msgs::msg::Float64>().data(th_Vx_l));
     this->th_Vr_pub_->publish(std_msgs::build<std_msgs::msg::Float64>().data(th_Vx_r));
 

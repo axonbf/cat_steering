@@ -54,6 +54,14 @@ class Skid_Steering : public rclcpp::Node
 
   Skid_Steering(): Node("skid_steering")
   {
+    // parameters
+    auto param_desc = rcl_interfaces::msg::ParameterDescriptor{};
+    param_desc.description = "this is the Kv of the left motor. Meaning Kv*Voltage = motor rpms!";
+    this->declare_parameter("Kv_left", 303.6535, param_desc);
+    //float_t Kv_left  = 303.6535;// 350;  //
+    //float_t Kv_right = 301.7117;// 350;  //
+    param_desc.description = "this is the Kv of the left motor. Meaning Kv*Voltage = motor rpms!";
+    this->declare_parameter("Kv_right", 301.7117, param_desc);
 
     auto cmd_vel_callback =
     [this](geometry_msgs::msg::Twist msg) -> void{
@@ -279,8 +287,8 @@ class Skid_Steering : public rclcpp::Node
   //bool pilot_steer_type_change_rqst = false;
   int  pilot_steer_button_last = 0;
 
-  float_t Kv_left  = 303.6535;// 350;  //
-  float_t Kv_right = 301.7117;// 350;  //
+  //float_t Kv_left  = 303.6535;// 350;  //
+  //float_t Kv_right = 301.7117;// 350;  //
 
   // PP propeller pitch and diameter
   // uint16_t prop_p = 7; // cm according to the formulas atan(1.5/2) = 36.8. Making a triangle where Ca = perimeter using 3 cm  for diameter (the half), Ca will be the pitch
@@ -291,7 +299,8 @@ class Skid_Steering : public rclcpp::Node
   float_t th_slip_     = 0.13;
   float_t slip_{};
   float_t motor_limit_ = 0.98;
-  float_t max_speed_   = (1-th_slip_)*(Kv_left > Kv_right ? Kv_right*min_voltage_/60*prop_p : Kv_left*min_voltage_/60*prop_p);
+  //float_t max_speed_   = (1-th_slip_)*(Kv_left > Kv_right ? Kv_right*min_voltage_/60*prop_p : Kv_left*min_voltage_/60*prop_p);
+  float_t max_speed_   = (1-th_slip_)*(this->get_parameter("Kv_left").as_double() > this->get_parameter("Kv_right").as_double() ? this->get_parameter("Kv_right").as_double()*min_voltage_/60*prop_p : this->get_parameter("Kv_left").as_double()*min_voltage_/60*prop_p);
   float_t th_Vx_l{};
   float_t th_Vx_r{};
 
@@ -346,7 +355,8 @@ class Skid_Steering : public rclcpp::Node
   double_t percent2rpm_left(double_t rpm_left_percent)
   {
     //double_t rpm_left = battery_voltage*Kv_left*rpm_left_percent;
-    return battery_voltage*Kv_left*rpm_left_percent;
+    //return battery_voltage*Kv_left*rpm_left_percent;
+    return battery_voltage*this->get_parameter("Kv_left").as_double()*rpm_left_percent;
   }
 
   double_t rpm2speed_left(double_t rpm_left)
@@ -379,8 +389,11 @@ class Skid_Steering : public rclcpp::Node
   double_t rpm2percent_left(double_t rpm_left)
   {
     //double_t rpm_left = battery_voltage*Kv_left*rpm_left_percent;
-    if ( fabs(battery_voltage*Kv_left) < 0.001) return 0.0;
-    else return (rpm_left/ (battery_voltage*Kv_left));
+    //if ( fabs(battery_voltage*Kv_left) < 0.001) return 0.0;
+    //else return (rpm_left/ (battery_voltage*Kv_left));
+
+    if ( fabs(battery_voltage*(this->get_parameter("Kv_left").as_double())) < 0.001) return 0.0;
+    else return (rpm_left/ (battery_voltage*this->get_parameter("Kv_left").as_double()));
   }
 
   double_t percent2servo_left(double_t rpm_left_percent)
@@ -459,14 +472,14 @@ class Skid_Steering : public rclcpp::Node
 
   double_t percent2rpm_right(double_t rpm_right_percent)
   {
-    return battery_voltage*Kv_right*rpm_right_percent;
+    return battery_voltage*this->get_parameter("Kv_right").as_double()*rpm_right_percent;
   }
 
   double_t rpm2percent_right(double_t rpm_right)
   {
     //double_t rpm_left = battery_voltage*Kv_left*rpm_left_percent;
-    if ( fabs(battery_voltage*Kv_right) < 0.001) return 0.0;
-    else return (rpm_right/ (battery_voltage*Kv_right));
+    if ( fabs(battery_voltage*this->get_parameter("Kv_right").as_double()  ) < 0.001) return 0.0;
+    else return (rpm_right/ (battery_voltage*this->get_parameter("Kv_right").as_double() ));
   }
 
   double_t percent2servo_right(double_t rpm_right_percent)

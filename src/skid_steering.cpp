@@ -45,6 +45,12 @@
 
 // Demos: https://github.com/ros2/demos/blob/06f25e9c8801ea95a0c25260cb38f2f0c6af3ea0/demo_nodes_cpp/src/services/add_two_ints_client_async.cpp#L62-L73
 
+// ToDos:
+// [ ] Finish and tests KvAsParameter
+// [ ] merge to main
+// [ ] update the correct equations for angular speed using the paper of skid steerin
+// [ ] clean up the code and repetions and calls and what is theorerital and what is measured etc
+
 using std::placeholders::_1;
 using namespace std::chrono_literals;
 
@@ -60,7 +66,7 @@ class Skid_Steering : public rclcpp::Node
     this->declare_parameter("Kv_left", 303.6535, param_desc);
     //float_t Kv_left  = 303.6535;// 350;  //
     //float_t Kv_right = 301.7117;// 350;  //
-    param_desc.description = "this is the Kv of the left motor. Meaning Kv*Voltage = motor rpms!";
+    param_desc.description = "this is the Kv of the right motor. Meaning Kv*Voltage = motor rpms!";
     this->declare_parameter("Kv_right", 301.7117, param_desc);
 
     auto cmd_vel_callback =
@@ -475,6 +481,10 @@ class Skid_Steering : public rclcpp::Node
     return battery_voltage*this->get_parameter("Kv_right").as_double()*rpm_right_percent;
   }
 
+  /// @brief Converts the rpms to a percentage of the total possible rpms of the motor base on the dutty cycle. 
+  /// rpm = (Voltage*percent)*Kv
+  /// @param rpm_right 
+  /// @return percetage 
   double_t rpm2percent_right(double_t rpm_right)
   {
     //double_t rpm_left = battery_voltage*Kv_left*rpm_left_percent;
@@ -590,7 +600,8 @@ class Skid_Steering : public rclcpp::Node
   {
     return (th_Vx_r - th_Vx_l)/trackWith_; // ToDo check (th_Vx_r - th_Vx_l)/(trackWicth_/2);
     // which should be the same as: steering_rate = ( (th_Vx_r + th_Vx_l)/2 )*trackWidth_)/ th_radius;
-    // 
+    // the one above is equivalent to steering_rate * r = V;   but it is weard since it should be 2*trackWidt?
+    // the skid steering paper from the state of the art resear says  wz = (-vl + vr)/(2*B*X); where X is related to the sleepage, 
   }
   
   void set_speed_and_radious_skid(double_t linear_speed, double_t radious)
@@ -607,16 +618,16 @@ class Skid_Steering : public rclcpp::Node
     // dV = Vx*2
     
     // update linear speed -- really necesary?
-    double_t Vx   = (th_Vx_l + th_Vx_r)/2;
+    //double_t Vx   = (th_Vx_l + th_Vx_r)/2;
 
-    double_t dV_e = linear_speed - Vx;
+    double_t dV_e = linear_speed - th_veh_linear_speed();//Vx;
     double_t new_Vx_l = th_Vx_l + dV_e;
     double_t new_Vx_r = th_Vx_r + dV_e;
 
     // update turning speed
-    double_t isYawRate = (new_Vx_l - new_Vx_r);
+    //double_t isYawRate = (new_Vx_l - new_Vx_r);
 
-    double_t dYawRate_e = angular_speed - isYawRate;
+    double_t dYawRate_e = angular_speed - th_veh_angular_speed();//isYawRate;
     double_t new_speed_left  = new_Vx_l + dYawRate_e/2.0;
     double_t new_speed_right = new_Vx_r - dYawRate_e/2.0;
     //**RCLCPP_INFO(this->get_logger(), "Thiemos: max_seed: %f; motor_limit_: %f; new_speed_left: %f; new_speed_right: %f, th_Vx_l: %f, th_Vx_r: %f", max_speed_, motor_limit_, new_speed_left, new_speed_right, th_Vx_l, th_Vx_r);
@@ -780,10 +791,8 @@ class Skid_Steering : public rclcpp::Node
 
     th_Vx_ = th_veh_linear_speed();
     th_w_  = th_veh_angular_speed();
-    slip_ = (th_Vx_ - ground_speed_)/th_Vx_; // ToDo: make a get funtion
     this->th_Vx_pub_->publish(std_msgs::build<std_msgs::msg::Float64>().data(th_Vx_));
     this->th_w_pub_->publish(std_msgs::build<std_msgs::msg::Float64>().data(th_w_));
-    this->slip_pub_->publish(std_msgs::build<std_msgs::msg::Float64>().data(slip_));
 
   }
 
@@ -791,6 +800,7 @@ class Skid_Steering : public rclcpp::Node
   {
     ground_speed_ = msg.groundspeed;
     slip_ = (th_Vx_ - ground_speed_)/th_Vx_;
+    this->slip_pub_->publish(std_msgs::build<std_msgs::msg::Float64>().data(slip_));
 
     //RCLCPP_INFO(this->get_logger(),"th_Vx: %f; ground_seed: %f; slip: %f",th_Vx_,ground_speed_,slip_);
   }

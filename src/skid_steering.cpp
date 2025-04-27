@@ -28,9 +28,9 @@
 #define RIGHT 2
 #endif
 
-#ifndef external_Kv_
-#define external_Kv_ true
-#endif
+//#ifndef external_Kv_
+//#define external_Kv_ true
+//#endif
 
 
 // Left: 3470 Full speed;  Right: 3445 Full speed
@@ -85,7 +85,7 @@ class Skid_Steering : public rclcpp::Node
             // from RC_In to Servo remapping ->  RC(1050 - 1950) Servo(1100 - 1950)
             // y = m*x + c; if x = 1500; y = 1500; 
 
-            set_differential_steering_skid(msg.linear.x*max_speed_, msg.angular.z*max_speed_);
+            set_differential_steering_skid(msg.linear.x*max_linear_speed_, msg.angular.z*max_angular_speed_); 
           }
           if(str_mode == 1){ //gamepad paddle
             uint16_t rc_left  = (uint16_t)((fabs(gamepad.axes[1])<0.01 ? 0 : gamepad.axes[1])*450 + 1500);
@@ -138,6 +138,7 @@ class Skid_Steering : public rclcpp::Node
         RCLCPP_INFO(this->get_logger(), "[timer_callback get_param] Service '%s' ON-LINE. ", client_get_parameters_->get_service_name());
         get_parameters_service_available = true;
         response_get_pilot_steer_type_received = false;
+        init_values();
         call_async_get_pilot_steer_type(); 
       }
 
@@ -208,6 +209,7 @@ class Skid_Steering : public rclcpp::Node
     vfr_sub_           = this->create_subscription<mavros_msgs::msg::VfrHud>      ("/mavros/vfr_hud",rclcpp::SensorDataQoS(), std::bind(&Skid_Steering::vfr_callback      ,this,_1));
 
     //general functions
+    void init_values(void);
     double_t servo2percent_left(uint16_t rc_in_left);
     double_t percent2rpm_left(double_t rpm_left_percent);
     double_t rpm2speed_left (double_t rpm_left);
@@ -308,17 +310,21 @@ class Skid_Steering : public rclcpp::Node
   float_t prop_p = 0.022; //0.03; // [m] measuring the mark on the motor we have 3.5; // cm from pbo.couk/choose-right-boat-propeller-6205 I take 4x(1/2*1.5cm) = 0.75*4 = 3 cm pitch
   float_t min_voltage_ = 11.15;
   float_t th_slip_     = 0.13;
-  float_t slip_{};
+  float_t slip_{}; // real time measured slip
   float_t motor_limit_ = 0.98;
 
   // Kvs
-  float_t Kv_left  = 303.6535;// 350;  //
-  float_t Kv_right = 301.7117;// 350;  //
+  //float_t Kv_left  = 303.6535;// 350;  //
+  //float_t Kv_right = 301.7117;// 350;  //
 
 
-    // ***FixME
-    //float_t max_speed_   = (1-th_slip_)*(this->get_parameter("Kv_left").as_double() > this->get_parameter("Kv_right").as_double() ? this->get_parameter("Kv_right").as_double()*min_voltage_/60*prop_p : this->get_parameter("Kv_left").as_double()*min_voltage_/60*prop_p);
-    float_t max_speed_   = (1-th_slip_)*(Kv_left > Kv_right ? Kv_right*min_voltage_/60*prop_p : Kv_left*min_voltage_/60*prop_p);
+  // ***FixME it has to be initialized over a function, otherwise it will to finde the parameter since it has not been declared yet
+  //float_t max_linear_speed_   = (1-th_slip_)*(this->get_parameter("Kv_left").as_double() > this->get_parameter("Kv_right").as_double() ? this->get_parameter("Kv_right").as_double()*min_voltage_/60*prop_p : this->get_parameter("Kv_left").as_double()*min_voltage_/60*prop_p);
+  float_t max_linear_speed_ {};//  = (1-th_slip_)*(get_parameter("Kv_left").as_double() 
+                               //               > get_parameter("Kv_right").as_double() 
+                               //               ? get_parameter("Kv_right").as_double()*min_voltage_/60*prop_p 
+                               //               : get_parameter("Kv_left").as_double()*min_voltage_/60*prop_p);
+  float_t max_angular_speed_{}; // = 2*max_linear_speed_/trackWith_; // 2*Vx/radius
 
   float_t th_Vx_l{};
   float_t th_Vx_r{};
@@ -351,6 +357,21 @@ class Skid_Steering : public rclcpp::Node
 
   float trackWith_ = 0.28; // 28 [cm]
 
+  void init_values(void)
+  {
+    RCLCPP_INFO(this->get_logger(), "Init values: ");
+    RCLCPP_INFO(this->get_logger(), "Kv_left: %f; Kv_right: %f", this->get_parameter("Kv_left").as_double(), this->get_parameter("Kv_right").as_double());
+    max_linear_speed_   = (1-th_slip_)*(this->get_parameter("Kv_left").as_double() > this->get_parameter("Kv_right").as_double() ? this->get_parameter("Kv_right").as_double()*min_voltage_/60*prop_p : this->get_parameter("Kv_left").as_double()*min_voltage_/60*prop_p);
+    max_angular_speed_  = 2*max_linear_speed_/trackWith_; // 2*Vx/radius
+    th_curvature_       = 0.0;
+    th_Vx_              = 0.0;
+    th_w_               = 0.0;
+    th_radius_          = 0.0;
+    th_motor_rpm_left_  = 0.0;
+    th_motor_rpm_right_ = 0.0;
+    th_sleep_           = 1.0;//0.873;
+    slip_               = 0.0;
+  }
 
   double_t servo2percent_left (uint16_t rc_in_left)
   {
@@ -374,14 +395,12 @@ class Skid_Steering : public rclcpp::Node
 
   double_t percent2rpm_left(double_t rpm_left_percent)
   {
-    //double_t rpm_left = battery_voltage*Kv_left*rpm_left_percent;
-    //return battery_voltage*Kv_left*rpm_left_percent;
-    if(external_Kv_)
-    {
+    //if(external_Kv_)
+    //{
       return battery_voltage*this->get_parameter("Kv_left").as_double()*rpm_left_percent;
-    }else{
-      return battery_voltage*Kv_left*rpm_left_percent;
-    }
+    //}else{
+    //  return battery_voltage*Kv_left*rpm_left_percent;
+    //}
   }
 
   double_t rpm2speed_left(double_t rpm_left)
@@ -417,13 +436,13 @@ class Skid_Steering : public rclcpp::Node
     //if ( fabs(battery_voltage*Kv_left) < 0.001) return 0.0;
     //else return (rpm_left/ (battery_voltage*Kv_left));
 
-    if(external_Kv_){
+    //if(external_Kv_){
       if ( fabs(battery_voltage*(this->get_parameter("Kv_left").as_double())) < 0.001) return 0.0;
       else return (rpm_left/ (battery_voltage*this->get_parameter("Kv_left").as_double()));
-    }else{
-      if ( fabs(battery_voltage*(Kv_left)) < 0.001) return 0.0;
-      else return (rpm_left/ (battery_voltage*Kv_left));
-    }
+    //}else{
+    //  if ( fabs(battery_voltage*(Kv_left)) < 0.001) return 0.0;
+    //  else return (rpm_left/ (battery_voltage*Kv_left));
+    //}
   }
 
   double_t percent2servo_left(double_t rpm_left_percent)
@@ -502,11 +521,11 @@ class Skid_Steering : public rclcpp::Node
 
   double_t percent2rpm_right(double_t rpm_right_percent)
   {
-    if(external_Kv_){
+    //if(external_Kv_){
       return battery_voltage*this->get_parameter("Kv_right").as_double()*rpm_right_percent;
-    }else{
-      return battery_voltage*Kv_right*rpm_right_percent;
-    }
+    //}else{
+    //  return battery_voltage*Kv_right*rpm_right_percent;
+    //}
   }
 
   /// @brief Converts the rpms to a percentage of the total possible rpms of the motor base on the dutty cycle. 
@@ -516,14 +535,14 @@ class Skid_Steering : public rclcpp::Node
   double_t rpm2percent_right(double_t rpm_right)
   {
     //double_t rpm_left = battery_voltage*Kv_left*rpm_left_percent;
-    if(external_Kv_)
-    {
+    //if(external_Kv_)
+    //{
       if ( fabs(battery_voltage*this->get_parameter("Kv_right").as_double()  ) < 0.001) return 0.0;
       else return (rpm_right/ (battery_voltage*this->get_parameter("Kv_right").as_double() ));
-    }else{
-      if(Kv_right < 0.001) return 0.0;
-      else return (rpm_right/ (battery_voltage*Kv_right));
-    }
+    //}else{
+    //  if(Kv_right < 0.001) return 0.0;
+    //  else return (rpm_right/ (battery_voltage*Kv_right));
+    //}
   }
 
   double_t percent2servo_right(double_t rpm_right_percent)
@@ -644,7 +663,7 @@ class Skid_Steering : public rclcpp::Node
     set_differential_steering_skid(linear_speed, angular_speed);
   }
 
-  void set_differential_steering_skid(double_t linear_speed, double_t angular_speed)
+  void set_differential_steering_skid(double_t desired_linear_speed, double_t desired_angular_speed)
   {
     // Vx = (Vr + Vl)/2; 
     // Vr = Vx*2 - Vl
@@ -654,14 +673,15 @@ class Skid_Steering : public rclcpp::Node
     // update linear speed -- really necesary?
     //double_t Vx   = (th_Vx_l + th_Vx_r)/2;
 
-    double_t dV_e = linear_speed - th_veh_linear_speed();//Vx;
+    double_t dV_e = desired_linear_speed - th_veh_linear_speed();//Vx;
     double_t new_Vx_l = th_Vx_l + dV_e;
     double_t new_Vx_r = th_Vx_r + dV_e;
 
     // update turning speed
     //double_t isYawRate = (new_Vx_l - new_Vx_r);
 
-    double_t dYawRate_e = angular_speed - th_veh_angular_speed();//isYawRate;
+    // **ToDo both methosds are the same, but the second one is quicker calculating. This will will increase the speed of the system in smaller steps
+    double_t dYawRate_e = desired_angular_speed - th_veh_angular_speed();//isYawRate;
     double_t new_speed_left  = new_Vx_l + dYawRate_e/2.0;
     double_t new_speed_right = new_Vx_r - dYawRate_e/2.0;
     //**RCLCPP_INFO(this->get_logger(), "Thiemos: max_seed: %f; motor_limit_: %f; new_speed_left: %f; new_speed_right: %f, th_Vx_l: %f, th_Vx_r: %f", max_speed_, motor_limit_, new_speed_left, new_speed_right, th_Vx_l, th_Vx_r);
@@ -672,8 +692,8 @@ class Skid_Steering : public rclcpp::Node
     //new_Vx_r = linear_speed;
 
     // Step 02 update the turning rate
-    new_speed_left  = linear_speed + angular_speed/2;
-    new_speed_right = linear_speed - angular_speed/2; 
+    new_speed_left  = desired_linear_speed + desired_angular_speed/2;
+    new_speed_right = desired_linear_speed - desired_angular_speed/2; 
     //**RCLCPP_INFO(this->get_logger(), "Benjami: max_speed: %f; motor_limit_: %f; new_speed_left: %f; new_speed_right: %f", max_speed_, motor_limit_, new_speed_left, new_speed_right);
     // when is the track with used?
     uint16_t rc_left, rc_right;
@@ -685,10 +705,10 @@ class Skid_Steering : public rclcpp::Node
     // I could also set the max at the sepeed,....
     //***rc_left  =  left_speed_2_rc(new_speed_left,  max_speed_);
     //***rc_right = right_speed_2_rc(new_speed_right, max_speed_);
-    if(new_speed_left  >  max_speed_) new_speed_left  =  max_speed_;
-    if(new_speed_left  < -max_speed_) new_speed_left  = -max_speed_;
-    if(new_speed_right >  max_speed_) new_speed_right =  max_speed_;
-    if(new_speed_right < -max_speed_) new_speed_right = -max_speed_;
+    if(new_speed_left  >  max_linear_speed_) new_speed_left  =  max_linear_speed_;
+    if(new_speed_left  < -max_linear_speed_) new_speed_left  = -max_linear_speed_;
+    if(new_speed_right >  max_linear_speed_) new_speed_right =  max_linear_speed_;
+    if(new_speed_right < -max_linear_speed_) new_speed_right = -max_linear_speed_;
 
     rc_left  = servo2rc_left( percent2servo_left (rpm2percent_left( speed2rpm_left (new_speed_left)))); 
     rc_right = servo2rc_right(percent2servo_right(rpm2percent_right(speed2rpm_right(new_speed_right))));
@@ -855,15 +875,13 @@ class Skid_Steering : public rclcpp::Node
     request->names.push_back("PILOT_STEER_TYPE");  // ToDo, perhaps first ask the type of values, and check if PILOT_STEER_TYPE exist
     RCLCPP_INFO(this->get_logger(), "[call_async_get_pilot_steer_type] Sending request to check PILOT_STEER_TYPE ");
 
-    RCLCPP_INFO(this->get_logger(),"[call_async_get_pilot_steert_type] before");
     auto result = client_get_parameters_->async_send_request(request, std::bind(&Skid_Steering::get_parameters_response_received_callback, this, std::placeholders::_1));
-    RCLCPP_INFO(this->get_logger(),"[call_async_get_pilot_steert_type] after ");
   }
 
   void get_parameters_response_received_callback (rclcpp::Client<rcl_interfaces::srv::GetParameters>::SharedFuture future) 
   {
     auto result = future.get();
-    RCLCPP_INFO(this->get_logger(), "[>***< get_parameters_response_received_callback] Result arrived... size: %ld, type: %o, value: %ld (%s). ", result->values.size(), result->values[0].type, result->values[0].integer_value,to_string(result->values[0].integer_value).c_str());
+    RCLCPP_INFO(this->get_logger(), "[get_parameters_response_received_callback] Result arrived... size: %ld, type: %o, value: %ld (%s). ", result->values.size(), result->values[0].type, result->values[0].integer_value,to_string(result->values[0].integer_value).c_str());
     current_pilot_steer_type = result->values[0].integer_value;
     response_get_pilot_steer_type_received = true;
     if(current_pilot_steer_type == 1)
@@ -913,6 +931,7 @@ class Skid_Steering : public rclcpp::Node
     auto request = std::make_shared<mavros_msgs::srv::SetMode::Request>();
     request->custom_mode = "MANUAL";
 
+    RCLCPP_INFO(this->get_logger(), "[call_async_set_manual_mode] Service '%s' will be called async to change mode to MANUAL... ", client_set_mode_->get_service_name());
     auto result = client_set_mode_->async_send_request(request, std::bind(&Skid_Steering::set_manual_mode_response_callback,          this, std::placeholders::_1));
   }
 

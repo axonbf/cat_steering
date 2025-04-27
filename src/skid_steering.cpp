@@ -28,11 +28,6 @@
 #define RIGHT 2
 #endif
 
-//#ifndef external_Kv_
-//#define external_Kv_ true
-//#endif
-
-
 // Left: 3470 Full speed;  Right: 3445 Full speed
 // Dilwe RC F2838 350Kv; 27.April 2020 3000 RPM 
 // 11.1 V; No Load Current 0.25A; No Load Speed (rpm) 3950; Max Current 7.5 A; Max Power (w)
@@ -72,6 +67,16 @@ class Skid_Steering : public rclcpp::Node
     this->declare_parameter("Kv_left", 303.6535, param_desc);
     param_desc.description = "this is the Kv of the right motor. Meaning Kv*Voltage = motor rpms!";
     this->declare_parameter("Kv_right", 301.7117, param_desc);
+    param_desc.description = "This is the desired slip for the speed to adapt the linear speed of the boat";
+    this->declare_parameter("Th_slip", 0.13, param_desc); // th_slip_
+    param_desc.description = "This is the propeller pitch Prop_p";
+    this->declare_parameter("Prop_p", 0.022, param_desc); // float_t prop_p = 0.022; //0.03; // [m] measuring the mark on the motor we have 3.5; // cm from pbo.couk/choose-right-boat-propeller-6205 I take 4x(1/2*1.5cm) = 0.75*4 = 3 cm pitch
+    param_desc.description = "This is the propeller diameter Prop_d";
+    this->declare_parameter("Prop_d", 0.06, param_desc); // prop_d              = 0.06; // [m] Diameter from the center of to the tip of the propeller 
+    param_desc.description = "This is the minimum voltate, this is used to calculate the rpms and the max speed ";
+    this->declare_parameter("Min_voltage", 11.15, param_desc); // min_voltage_        = 11.15;
+    param_desc.description = "This is the maximum percent used for the motor. This can also be used to use more efficently up to 70 or 85 percent of the motor ";
+    this->declare_parameter("Motor_limit", 0.98, param_desc); // motor_limit_        = 0.98;
 
     auto cmd_vel_callback =
     [this](geometry_msgs::msg::Twist msg) -> void{
@@ -251,6 +256,9 @@ class Skid_Steering : public rclcpp::Node
     th_rpm_left_pub_  = this->create_publisher<std_msgs::msg::Float64>("cat/th_rpm_left",10);
     th_rpm_right_pub_ = this->create_publisher<std_msgs::msg::Float64>("cat/th_rpm_right",10);
     slip_pub_         = this->create_publisher<std_msgs::msg::Float64>("cat/slip",10);
+    // desired values
+    set_Vl_pub_        = this->create_publisher<std_msgs::msg::Float64>("cat/set_Vl",10);
+    set_Vr_pub_        = this->create_publisher<std_msgs::msg::Float64>("cat/set_Vr",10);
 
     // Services
     client_get_parameters_       = this->create_client<rcl_interfaces::srv::GetParameters>("mavros/param/get_parameters");
@@ -284,6 +292,8 @@ class Skid_Steering : public rclcpp::Node
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr th_rpm_left_pub_; // th_rpm_left
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr th_rpm_right_pub_; // th_rpm_right
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr slip_pub_; 
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr set_Vl_pub_; // set_Vl
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr set_Vr_pub_; // set_Vr
   
   rclcpp::Client<rcl_interfaces::srv::GetParameters>::SharedPtr client_get_parameters_; // td_srvs::srv::SetBoll>::SharedPtr client_;
   rclcpp::Client<rcl_interfaces::srv::SetParameters>::SharedPtr client_set_parameters_; // td_srvs::srv::SetBoll>::SharedPtr client_;
@@ -306,25 +316,14 @@ class Skid_Steering : public rclcpp::Node
   // PP propeller pitch and diameter
   // uint16_t prop_p = 7; // cm according to the formulas atan(1.5/2) = 36.8. Making a triangle where Ca = perimeter using 3 cm  for diameter (the half), Ca will be the pitch
   // V = [RPM x PP x (1- S) x GR] / 60 
-  float_t prop_d = 0.06; // [m] Diameter from the center of to the tip of the propeller 
-  float_t prop_p = 0.022; //0.03; // [m] measuring the mark on the motor we have 3.5; // cm from pbo.couk/choose-right-boat-propeller-6205 I take 4x(1/2*1.5cm) = 0.75*4 = 3 cm pitch
-  float_t min_voltage_ = 11.15;
-  float_t th_slip_     = 0.13;
+  //float_t prop_d = 0.06; // [m] Diameter from the center of to the tip of the propeller 
+  //float_t prop_p = 0.022; //0.03; // [m] measuring the mark on the motor we have 3.5; // cm from pbo.couk/choose-right-boat-propeller-6205 I take 4x(1/2*1.5cm) = 0.75*4 = 3 cm pitch
+  //float_t min_voltage_ = 11.15;
   float_t slip_{}; // real time measured slip
-  float_t motor_limit_ = 0.98;
+  //float_t motor_limit_ = 0.98;
 
-  // Kvs
-  //float_t Kv_left  = 303.6535;// 350;  //
-  //float_t Kv_right = 301.7117;// 350;  //
-
-
-  // ***FixME it has to be initialized over a function, otherwise it will to finde the parameter since it has not been declared yet
-  //float_t max_linear_speed_   = (1-th_slip_)*(this->get_parameter("Kv_left").as_double() > this->get_parameter("Kv_right").as_double() ? this->get_parameter("Kv_right").as_double()*min_voltage_/60*prop_p : this->get_parameter("Kv_left").as_double()*min_voltage_/60*prop_p);
-  float_t max_linear_speed_ {};//  = (1-th_slip_)*(get_parameter("Kv_left").as_double() 
-                               //               > get_parameter("Kv_right").as_double() 
-                               //               ? get_parameter("Kv_right").as_double()*min_voltage_/60*prop_p 
-                               //               : get_parameter("Kv_left").as_double()*min_voltage_/60*prop_p);
-  float_t max_angular_speed_{}; // = 2*max_linear_speed_/trackWith_; // 2*Vx/radius
+  float_t max_linear_speed_ {};
+  float_t max_angular_speed_{}; 
 
   float_t th_Vx_l{};
   float_t th_Vx_r{};
@@ -337,7 +336,6 @@ class Skid_Steering : public rclcpp::Node
   double_t th_w_{};
   float_t ground_speed_{};
   double_t th_radius_{};
-  double_t th_sleep_ = 1.0;//0.873;
   
   //double_t th_linear_speed_left{};
   //double_t th_linear_speed_rith{};
@@ -359,18 +357,27 @@ class Skid_Steering : public rclcpp::Node
 
   void init_values(void)
   {
-    RCLCPP_INFO(this->get_logger(), "Init values: ");
-    RCLCPP_INFO(this->get_logger(), "Kv_left: %f; Kv_right: %f", this->get_parameter("Kv_left").as_double(), this->get_parameter("Kv_right").as_double());
-    max_linear_speed_   = (1-th_slip_)*(this->get_parameter("Kv_left").as_double() > this->get_parameter("Kv_right").as_double() ? this->get_parameter("Kv_right").as_double()*min_voltage_/60*prop_p : this->get_parameter("Kv_left").as_double()*min_voltage_/60*prop_p);
-    max_angular_speed_  = 2*max_linear_speed_/trackWith_; // 2*Vx/radius
     th_curvature_       = 0.0;
     th_Vx_              = 0.0;
     th_w_               = 0.0;
     th_radius_          = 0.0;
     th_motor_rpm_left_  = 0.0;
     th_motor_rpm_right_ = 0.0;
-    th_sleep_           = 1.0;//0.873;
     slip_               = 0.0;
+    //prop_d              = 0.06; // [m] Diameter from the center of to the tip of the propeller 
+    //prop_p              = 0.022; //0.03; // [m] measuring the mark on the motor we have 3.5; // cm from pbo.couk/choose-right-boat-propeller-6205 I take 4x(1/2*1.5cm) = 0.75*4 = 3 cm pitch
+    //min_voltage_        = 11.15;
+    slip_               = 0.0; // real time measured slip
+    //motor_limit_        = 0.98;
+
+    RCLCPP_INFO(this->get_logger(), "Init values: ");
+    RCLCPP_INFO(this->get_logger(), "Kv_left: %f; Kv_right: %f", this->get_parameter("Kv_left").as_double(), this->get_parameter("Kv_right").as_double());
+    max_linear_speed_   = (this->get_parameter("Kv_left").as_double() 
+                          > this->get_parameter("Kv_right").as_double() 
+                          ? this->get_parameter("Kv_right").as_double()*this->get_parameter("Min_voltage").as_double() /60*( (1-this->get_parameter("Th_slip").as_double())* this->get_parameter("Prop_p").as_double() ) 
+                          : this->get_parameter("Kv_left").as_double()* this->get_parameter("Min_voltage").as_double() /60*(  (1-this->get_parameter("Th_slip").as_double())* this->get_parameter("Prop_p").as_double() ));
+    max_angular_speed_  = 2*max_linear_speed_/trackWith_; // 2*Vx/radius
+
   }
 
   double_t servo2percent_left (uint16_t rc_in_left)
@@ -395,12 +402,7 @@ class Skid_Steering : public rclcpp::Node
 
   double_t percent2rpm_left(double_t rpm_left_percent)
   {
-    //if(external_Kv_)
-    //{
       return battery_voltage*this->get_parameter("Kv_left").as_double()*rpm_left_percent;
-    //}else{
-    //  return battery_voltage*Kv_left*rpm_left_percent;
-    //}
   }
 
   double_t rpm2speed_left(double_t rpm_left)
@@ -410,8 +412,10 @@ class Skid_Steering : public rclcpp::Node
     //  float_t servo_left_percent  = (servo_raw_left-1500)/400.0; // from 1100 to 1900
     //  float_t mot_rpm_th_l = Kv_left*battery_voltage*servo_left_percent;
     //  th_Vx_l = mot_rpm_th_l/60 * prop_p;
-    //double_t linear_speed_left = th_motor_rpm_left_/60*prop_p;
-    double_t linear_speed_left = rpm_left/60*prop_p;
+    //double_t linear_speed_left = th_motor_rpm_left_/60*prop_p; 
+    //Note rpm_left = th_motor_rpm_left_, the second is put in to the function to be more clear
+    //double_t linear_speed_left = rpm_left/60*prop_p;
+    double_t linear_speed_left = rpm_left/60*((1-this->get_parameter("Th_slip").as_double())* this->get_parameter("Prop_p").as_double() );
     return linear_speed_left;
   }
 
@@ -425,8 +429,8 @@ class Skid_Steering : public rclcpp::Node
     //double_t linear_speed_left = th_motor_rpm_left_/60*prop_p;
     //double_t linear_speed_left = rpm_left/60*prop_p;
     double_t rpm_left{};
-    if( fabs(prop_p) < 0.001) rpm_left = 0.0;
-    else rpm_left = speed_left*60/prop_p;
+    if( fabs( this->get_parameter("Prop_p").as_double() ) < 0.001) rpm_left = 0.0;
+    else rpm_left = speed_left*60/((1-this->get_parameter("Th_slip").as_double())* this->get_parameter("Prop_p").as_double() );
     return rpm_left;
   }
 
@@ -436,13 +440,8 @@ class Skid_Steering : public rclcpp::Node
     //if ( fabs(battery_voltage*Kv_left) < 0.001) return 0.0;
     //else return (rpm_left/ (battery_voltage*Kv_left));
 
-    //if(external_Kv_){
       if ( fabs(battery_voltage*(this->get_parameter("Kv_left").as_double())) < 0.001) return 0.0;
       else return (rpm_left/ (battery_voltage*this->get_parameter("Kv_left").as_double()));
-    //}else{
-    //  if ( fabs(battery_voltage*(Kv_left)) < 0.001) return 0.0;
-    //  else return (rpm_left/ (battery_voltage*Kv_left));
-    //}
   }
 
   double_t percent2servo_left(double_t rpm_left_percent)
@@ -457,7 +456,7 @@ class Skid_Steering : public rclcpp::Node
     double_t deadZone = 0.05;
     uint16_t y{};
     //if( ux > 0.994){ ux = 0.994;} // RCLCPP_INFO(this->get_logger(),"************ux is bigger");} /// creo que 0.988 es el mayor
-    if( ux > motor_limit_){ ux = motor_limit_;} // RCLCPP_INFO(this->get_logger(),"************ux is bigger");} /// creo que 0.988 es el mayor
+    if( ux > this->get_parameter("Motor_limit").as_double()){ ux = this->get_parameter("Motor_limit").as_double();} // RCLCPP_INFO(this->get_logger(),"************ux is bigger");} /// creo que 0.988 es el mayor
     if( ux < deadZone) servo_left = 1500;
     else
     {
@@ -521,11 +520,7 @@ class Skid_Steering : public rclcpp::Node
 
   double_t percent2rpm_right(double_t rpm_right_percent)
   {
-    //if(external_Kv_){
       return battery_voltage*this->get_parameter("Kv_right").as_double()*rpm_right_percent;
-    //}else{
-    //  return battery_voltage*Kv_right*rpm_right_percent;
-    //}
   }
 
   /// @brief Converts the rpms to a percentage of the total possible rpms of the motor base on the dutty cycle. 
@@ -535,14 +530,8 @@ class Skid_Steering : public rclcpp::Node
   double_t rpm2percent_right(double_t rpm_right)
   {
     //double_t rpm_left = battery_voltage*Kv_left*rpm_left_percent;
-    //if(external_Kv_)
-    //{
       if ( fabs(battery_voltage*this->get_parameter("Kv_right").as_double()  ) < 0.001) return 0.0;
       else return (rpm_right/ (battery_voltage*this->get_parameter("Kv_right").as_double() ));
-    //}else{
-    //  if(Kv_right < 0.001) return 0.0;
-    //  else return (rpm_right/ (battery_voltage*Kv_right));
-    //}
   }
 
   double_t percent2servo_right(double_t rpm_right_percent)
@@ -555,7 +544,7 @@ class Skid_Steering : public rclcpp::Node
     uint16_t servo_right{};
     double_t deadZone = 0.05;
     uint16_t y{};
-    if( ux > motor_limit_){ ux = motor_limit_;} 
+    if( ux > this->get_parameter("Motor_limit").as_double()){ ux = this->get_parameter("Motor_limit").as_double() ;} 
     if( ux < deadZone) servo_right = 1500;
     else
     {
@@ -598,11 +587,12 @@ class Skid_Steering : public rclcpp::Node
     //  float_t servo_right_percent = (servo_raw_right-1500)/400.0; // from 1100 to 1900
     //  float_t mot_rpm_th_r = Kv_right*battery_voltage*servo_right_percent; //Kv*Voltage;
     //  th_Vx_r = mot_rpm_th_r/60 * prop_p;
-    double_t linear_speed_right = rpm_right/60*prop_p; 
+    double_t linear_speed_right = rpm_right/60*((1-this->get_parameter("Th_slip").as_double())* this->get_parameter("Prop_p").as_double() ); 
+    //double_t linear_speed_right = rpm_right/60*prop_p; 
     return linear_speed_right;
   }
 
-  double_t speed2rpm_right(double_t speed_right)
+  double_t speed2rpm_right(double_t speed_right)  
   {
     // V = [RPM x PP x (1- S) x GR] / 60 
     // V = ( Kv * Volgate * DuttyCycle * PP * (1-slipage) * Gear ) / 60
@@ -612,8 +602,8 @@ class Skid_Steering : public rclcpp::Node
     //double_t linear_speed_left = th_motor_rpm_left_/60*prop_p;
     //double_t linear_speed_left = rpm_left/60*prop_p;
     double_t rpm_right{};
-    if( fabs(prop_p) < 0.001) rpm_right = 0.0;
-    else rpm_right = speed_right*60/prop_p;
+    if( fabs( this->get_parameter("Prop_p").as_double() ) < 0.001) rpm_right = 0.0;
+    else rpm_right = speed_right*60/((1-this->get_parameter("Th_slip").as_double())* this->get_parameter("Prop_p").as_double() );
     return rpm_right;
   }
 
@@ -634,7 +624,9 @@ class Skid_Steering : public rclcpp::Node
     }
     else
     {
-      th_radius = ((th_left_speed*th_sleep_ + th_right_speed*th_sleep_)/2) * (16*trackWith_) / ( (th_left_speed*th_sleep_-th_right_speed*th_sleep_)/2);
+      // FexME: check if the radious and curvature calculation is the same everywhere
+      //th_radius = ((th_left_speed*th_sleep_ + th_right_speed*th_sleep_)/2) * (16*trackWith_) / ( (th_left_speed*th_sleep_-th_right_speed*th_sleep_)/2);
+      th_radius = ((th_left_speed + th_right_speed)/2) * (16*trackWith_) / ( (th_left_speed-th_right_speed)/2);
       th_curvature = 1000/th_radius;
       if(th_curvature >  33333) th_curvature = 33333;
       if(th_curvature < -33333) th_curvature = 33333;
@@ -710,8 +702,13 @@ class Skid_Steering : public rclcpp::Node
     if(new_speed_right >  max_linear_speed_) new_speed_right =  max_linear_speed_;
     if(new_speed_right < -max_linear_speed_) new_speed_right = -max_linear_speed_;
 
+    // ToDo publish the desired speed
+    this->set_Vl_pub_->publish(std_msgs::build<std_msgs::msg::Float64>().data(new_speed_left));
+    this->set_Vr_pub_->publish(std_msgs::build<std_msgs::msg::Float64>().data(new_speed_right));
+
     rc_left  = servo2rc_left( percent2servo_left (rpm2percent_left( speed2rpm_left (new_speed_left)))); 
     rc_right = servo2rc_right(percent2servo_right(rpm2percent_right(speed2rpm_right(new_speed_right))));
+
 
     rcOverride.channels[LEFT] = rc_left;
     rcOverride.channels[RIGHT] = rc_right;
@@ -740,7 +737,7 @@ class Skid_Steering : public rclcpp::Node
     double_t deadZone = 0.05;
     uint16_t y{};
     //if( ux > 0.994){ ux = 0.994;} // RCLCPP_INFO(this->get_logger(),"************ux is bigger");} /// creo que 0.988 es el mayor
-    if( ux > motor_limit_){ ux = motor_limit_;} // RCLCPP_INFO(this->get_logger(),"************ux is bigger");} /// creo que 0.988 es el mayor
+    if( ux > this->get_parameter("Motor_limit").as_double() ){ ux = this->get_parameter("Motor_limit").as_double() ;} // RCLCPP_INFO(this->get_logger(),"************ux is bigger");} /// creo que 0.988 es el mayor
     if( ux < deadZone) rc_left = 1500;
     else
     {
@@ -791,7 +788,7 @@ class Skid_Steering : public rclcpp::Node
     uint16_t rc_right{};
     double_t deadZone = 0.05;
     uint16_t y{};
-    if( ux > motor_limit_){ ux = motor_limit_;} 
+    if( ux > this->get_parameter("Motor_limit").as_double() ){ ux = this->get_parameter("Motor_limit").as_double();} 
     if( ux < deadZone) rc_right = 1500;
     else
     {

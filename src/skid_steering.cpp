@@ -77,6 +77,10 @@ class Skid_Steering : public rclcpp::Node
     this->declare_parameter("Min_voltage", 11.15, param_desc); // min_voltage_        = 11.15;
     param_desc.description = "This is the maximum percent used for the motor. This can also be used to use more efficently up to 70 or 85 percent of the motor ";
     this->declare_parameter("Motor_limit", 0.98, param_desc); // motor_limit_        = 0.98;
+    param_desc.description = "This is the instantaneus center of radious coeficient for a skid-steering, which in theory dependes of the left and right speeds. It is 1 when no splippage occurs (ideal differential drive)";
+    this->declare_parameter("ICR_x", 1.0, param_desc); 
+    param_desc.description = "Track width of the boat, or distance between the hulls";
+    this->declare_parameter("Track_width", 0.28, param_desc); // float trackWith_ = 0.28; // 28 [cm]
 
     auto cmd_vel_callback =
     [this](geometry_msgs::msg::Twist msg) -> void{
@@ -105,8 +109,8 @@ class Skid_Steering : public rclcpp::Node
 
     auto battery_state_callback =
     [this](sensor_msgs::msg::BatteryState msg) ->void{
-      //battery_state = msg;
-      battery_voltage = msg.voltage;
+      //battery_voltage = msg.voltage; 
+      battery_voltage = 11.61; // FixME -> for simulation to our talbe lest use 11.
       //RCLCPP_INFO(this->get_logger(), "Battery Voltage: %f.",battery_state.voltage);
     };
 
@@ -196,7 +200,7 @@ class Skid_Steering : public rclcpp::Node
         str_mode = 1;
       }
 
-      if(pilot_steer_button_last != msg.buttons[5])
+      if(pilot_steer_button_last != msg.buttons[5]) 
       {
         RCLCPP_INFO(this->get_logger(), "[joy_callback] Gamepad steering state changed from %d to %d. ", pilot_steer_button_last , msg.buttons[5]);
         pilot_steer_button_last = msg.buttons[5];
@@ -353,7 +357,7 @@ class Skid_Steering : public rclcpp::Node
   bool response_get_pilot_steer_type_received = true;
   bool response_set_pilot_steer_type_received = true;
 
-  float trackWith_ = 0.28; // 28 [cm]
+  //float trackWith_ = 0.28; // 28 [cm]
 
   void init_values(void)
   {
@@ -376,7 +380,7 @@ class Skid_Steering : public rclcpp::Node
                           > this->get_parameter("Kv_right").as_double() 
                           ? this->get_parameter("Kv_right").as_double()*this->get_parameter("Min_voltage").as_double() /60*( (1-this->get_parameter("Th_slip").as_double())* this->get_parameter("Prop_p").as_double() ) 
                           : this->get_parameter("Kv_left").as_double()* this->get_parameter("Min_voltage").as_double() /60*(  (1-this->get_parameter("Th_slip").as_double())* this->get_parameter("Prop_p").as_double() ));
-    max_angular_speed_  = 2*max_linear_speed_/trackWith_; // 2*Vx/radius
+    max_angular_speed_  = 2*max_linear_speed_/this->get_parameter("Track_width").as_double() ; // 2*Vx/radius FixME, I am producing up to 5 times the linear speed
 
   }
 
@@ -624,14 +628,15 @@ class Skid_Steering : public rclcpp::Node
     }
     else
     {
-      // FexME: check if the radious and curvature calculation is the same everywhere
+      // FixME: check if the radious and curvature calculation is the same everywhere
       //th_radius = ((th_left_speed*th_sleep_ + th_right_speed*th_sleep_)/2) * (16*trackWith_) / ( (th_left_speed*th_sleep_-th_right_speed*th_sleep_)/2);
-      th_radius = ((th_left_speed + th_right_speed)/2) * (16*trackWith_) / ( (th_left_speed-th_right_speed)/2);
+      th_radius = ((th_left_speed + th_right_speed)/2) * (16* this->get_parameter("Track_width").as_double() ) / ( (th_left_speed-th_right_speed)/2);
       th_curvature = 1000/th_radius;
       if(th_curvature >  33333) th_curvature = 33333;
       if(th_curvature < -33333) th_curvature = 33333;
       th_radius = 1000/th_curvature;
     }
+    // FixME what is the proper place to assign values to the variables?
     th_radius_ = th_radius;
     return th_curvature;
   }
@@ -643,10 +648,18 @@ class Skid_Steering : public rclcpp::Node
 
   double_t th_veh_angular_speed(void)
   {
-    return (th_Vx_r - th_Vx_l)/trackWith_; // ToDo check (th_Vx_r - th_Vx_l)/(trackWicth_/2);
-    // which should be the same as: steering_rate = ( (th_Vx_r + th_Vx_l)/2 )*trackWidth_)/ th_radius;
-    // the one above is equivalent to steering_rate * r = V;   but it is weard since it should be 2*trackWidt?
-    // the skid steering paper from the state of the art resear says  wz = (-vl + vr)/(2*B*X); where X is related to the sleepage, 
+    // Cosidering that the radious is equivlent to the center of mass of the vehicle, 
+    // this will correspond to the trackWidth/2, since the track width is the distance between the wheels
+    // return (th_Vx_r - th_Vx_l)/(trackWicth_/2);
+
+    // According to "Analysis and Experimental Kinematics of a Skid-Steering Wheeled Robot Based on a Laser Scanner Sensor"
+    // omega_z = (-th_Vx_l + th_Vx_r)/(2*yo), where yo is the instantaneous center of rotation (ICR), which is different from the track width
+    // lambda = (th_Vx_l + th_Vx_r)/(-th_Vx_l + th_Vx_r)
+    // ICR_x = (th_Vx_l + th_Vx_r)/track_with = 2*yo/trackWidth_2 // asumming Vl and Vr are simetrical
+
+    // Thereofre  wz = (-vl + vr)/(2*B*ICR_x); where ICR_x is related to the sleepage, and B is the track width
+    // see equations 46 and 47
+    return (th_Vx_r - th_Vx_l)/(2* this->get_parameter("Track_width").as_double() *this->get_parameter("ICR_x").as_double()); // ToDo change for a lookup table
   }
   
   void set_speed_and_radious_skid(double_t linear_speed, double_t radious)

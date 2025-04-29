@@ -12,6 +12,7 @@
 #include <std_msgs/msg/float64.hpp>
 #include <sensor_msgs/msg/joy.hpp>
 #include <sensor_msgs/msg/battery_state.hpp>
+#include <sensor_msgs/msg/imu.hpp>
 #include <mavros_msgs/srv/param_set.hpp>
 #include <mavros_msgs/srv/param_set_v2.hpp>
 #include <mavros_msgs/srv/param_get.hpp>
@@ -68,9 +69,9 @@ class Skid_Steering : public rclcpp::Node
     param_desc.description = "this is the Kv of the right motor. Meaning Kv*Voltage = motor rpms!";
     this->declare_parameter("Kv_right", 301.7117, param_desc);
     param_desc.description = "This is the desired slip for the speed to adapt the linear speed of the boat";
-    this->declare_parameter("Th_slip", 0.13, param_desc); // th_slip_
+    this->declare_parameter("Th_slip", 0.132, param_desc); // th_slip_ 0.12
     param_desc.description = "This is the propeller pitch Prop_p";
-    this->declare_parameter("Prop_p", 0.022, param_desc); // float_t prop_p = 0.022; //0.03; // [m] measuring the mark on the motor we have 3.5; // cm from pbo.couk/choose-right-boat-propeller-6205 I take 4x(1/2*1.5cm) = 0.75*4 = 3 cm pitch
+    this->declare_parameter("Prop_p", 0.0218, param_desc); // float_t prop_p = 0.022; //0.03; // [m] measuring the mark on the motor we have 3.5; // cm from pbo.couk/choose-right-boat-propeller-6205 I take 4x(1/2*1.5cm) = 0.75*4 = 3 cm pitch
     param_desc.description = "This is the propeller diameter Prop_d";
     this->declare_parameter("Prop_d", 0.06, param_desc); // prop_d              = 0.06; // [m] Diameter from the center of to the tip of the propeller 
     param_desc.description = "This is the minimum voltate, this is used to calculate the rpms and the max speed ";
@@ -81,6 +82,8 @@ class Skid_Steering : public rclcpp::Node
     this->declare_parameter("ICR_x", 1.0, param_desc); 
     param_desc.description = "Track width of the boat, or distance between the hulls";
     this->declare_parameter("Track_width", 0.28, param_desc); // float trackWith_ = 0.28; // 28 [cm]
+    param_desc.description = "Drag factor to be used for the calculation of the linear speed as Vx = Vl + Vr / (2*Drag_factor). It should never be 0.0";
+    this->declare_parameter("Drag_factor", 1.0, param_desc); 
 
     auto cmd_vel_callback =
     [this](geometry_msgs::msg::Twist msg) -> void{
@@ -211,11 +214,12 @@ class Skid_Steering : public rclcpp::Node
     // Subscribers
     cmd_vel_sub_       = this->create_subscription<geometry_msgs::msg::Twist     >("cmd_vel",        10, cmd_vel_callback);
     gamepad_           = this->create_subscription<sensor_msgs::msg::Joy         >("joy",            10, joy_callback);
-    ////raw_servo_sub_     = this->create_subscription<mavros_msgs::msg::RCOut       >("mavros/rc/out",  10, raw_servo_callback);
+    ////raw_servo_sub_     = this->create_subscription<mavros_msgs::msg::RCOut   >("mavros/rc/out",  10, raw_servo_callback);
     raw_servo_sub_     = this->create_subscription<mavros_msgs::msg::RCOut       >("mavros/rc/out",  10,                      std::bind(&Skid_Steering::raw_servo_callback,this,_1));
     battery_state_sub_ = this->create_subscription<sensor_msgs::msg::BatteryState>("mavros/battery", rclcpp::SensorDataQoS(), battery_state_callback);
-    //vfr_sub_           = this->create_subscription<mavros_msgs::msg::VfrHud>      ("/mavros/vfr_hud",rclcpp::SensorDataQoS(), vfr_callback);
-    vfr_sub_           = this->create_subscription<mavros_msgs::msg::VfrHud>      ("/mavros/vfr_hud",rclcpp::SensorDataQoS(), std::bind(&Skid_Steering::vfr_callback      ,this,_1));
+    //vfr_sub_           = this->create_subscription<mavros_msgs::msg::VfrHud    >("/mavros/vfr_hud",rclcpp::SensorDataQoS(), vfr_callback);
+    vfr_sub_           = this->create_subscription<mavros_msgs::msg::VfrHud      >("/mavros/vfr_hud",rclcpp::SensorDataQoS(), std::bind(&Skid_Steering::vfr_callback      ,this,_1));
+    imu_data_          = this->create_subscription<sensor_msgs::msg::Imu         >("/mavros/imu/data",rclcpp::SensorDataQoS(),std::bind(&Skid_Steering::imu_data_callback,this,_1));
 
     //general functions
     void init_values(void);
@@ -263,6 +267,8 @@ class Skid_Steering : public rclcpp::Node
     // desired values
     set_Vl_pub_        = this->create_publisher<std_msgs::msg::Float64>("cat/set_Vl",10);
     set_Vr_pub_        = this->create_publisher<std_msgs::msg::Float64>("cat/set_Vr",10);
+    is_radius_pub_     = this->create_publisher<std_msgs::msg::Float64>("cat/is_radius",10);
+    is_curvature_pub_  = this->create_publisher<std_msgs::msg::Float64>("cat/is_curvature",10);
 
     // Services
     client_get_parameters_       = this->create_client<rcl_interfaces::srv::GetParameters>("mavros/param/get_parameters");
@@ -285,6 +291,7 @@ class Skid_Steering : public rclcpp::Node
   rclcpp::Subscription<mavros_msgs::msg::RCOut>::SharedPtr raw_servo_sub_;
   rclcpp::Subscription<sensor_msgs::msg::BatteryState>::SharedPtr battery_state_sub_;
   rclcpp::Subscription<mavros_msgs::msg::VfrHud>::SharedPtr vfr_sub_;
+  rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_data_;
 
   rclcpp::Publisher<mavros_msgs::msg::OverrideRCIn>::SharedPtr rc_override_pub_;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr th_curvature_pub_; // th_curvature
@@ -298,6 +305,8 @@ class Skid_Steering : public rclcpp::Node
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr slip_pub_; 
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr set_Vl_pub_; // set_Vl
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr set_Vr_pub_; // set_Vr
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr is_radius_pub_; // is_radius
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr is_curvature_pub_; // is_curvature
   
   rclcpp::Client<rcl_interfaces::srv::GetParameters>::SharedPtr client_get_parameters_; // td_srvs::srv::SetBoll>::SharedPtr client_;
   rclcpp::Client<rcl_interfaces::srv::SetParameters>::SharedPtr client_set_parameters_; // td_srvs::srv::SetBoll>::SharedPtr client_;
@@ -336,10 +345,16 @@ class Skid_Steering : public rclcpp::Node
   double_t th_motor_rpm_right_{};
 
   double_t th_curvature_{};
+  double_t is_curvature_{};
+
   double_t th_Vx_{};
-  double_t th_w_{};
   float_t ground_speed_{};
+
+  double_t th_w_{};
+  double_t yaw_speed_{};
+
   double_t th_radius_{};
+  double_t is_radius_{};
   
   //double_t th_linear_speed_left{};
   //double_t th_linear_speed_rith{};
@@ -611,6 +626,7 @@ class Skid_Steering : public rclcpp::Node
     return rpm_right;
   }
 
+  // FixME -> use v = r*omega, and than transform the radius
   double_t th_curvature(void)
   {
     // I guess 3cm radius should be enough 3cm radius is 0.03m
@@ -643,7 +659,7 @@ class Skid_Steering : public rclcpp::Node
 
   double_t th_veh_linear_speed(void)
   {
-    return (th_Vx_l + th_Vx_r)/2;
+    return (th_Vx_l + th_Vx_r)/ (2*  this->get_parameter("Drag_factor").as_double() );
   }
 
   double_t th_veh_angular_speed(void)
@@ -659,7 +675,7 @@ class Skid_Steering : public rclcpp::Node
 
     // Thereofre  wz = (-vl + vr)/(2*B*ICR_x); where ICR_x is related to the sleepage, and B is the track width
     // see equations 46 and 47
-    return (th_Vx_r - th_Vx_l)/(2* this->get_parameter("Track_width").as_double() *this->get_parameter("ICR_x").as_double()); // ToDo change for a lookup table
+    return (th_Vx_r - th_Vx_l)/(2* this->get_parameter("Drag_factor").as_double()* this->get_parameter("Track_width").as_double() *this->get_parameter("ICR_x").as_double()); // ToDo change for a lookup table
   }
   
   void set_speed_and_radious_skid(double_t linear_speed, double_t radious)
@@ -849,14 +865,25 @@ class Skid_Steering : public rclcpp::Node
     this->th_Vl_pub_->publish(std_msgs::build<std_msgs::msg::Float64>().data(th_Vx_l));
     this->th_Vr_pub_->publish(std_msgs::build<std_msgs::msg::Float64>().data(th_Vx_r));
 
-    th_curvature_ = th_curvature();
-    this->th_curvature_pub_->publish(std_msgs::build<std_msgs::msg::Float64>().data(th_curvature_));
-    this->th_radius_pub_   ->publish(std_msgs::build<std_msgs::msg::Float64>().data(th_radius_)   );
-
     th_Vx_ = th_veh_linear_speed();
     th_w_  = th_veh_angular_speed();
     this->th_Vx_pub_->publish(std_msgs::build<std_msgs::msg::Float64>().data(th_Vx_));
     this->th_w_pub_->publish(std_msgs::build<std_msgs::msg::Float64>().data(th_w_));
+
+    //th_curvature_ = th_curvature(); FixME: not used, erase the function or do it differntly
+    if(fabs(th_w_) > 0.00001)
+    {
+      th_radius_    = 999999.9;
+    }
+    else
+    {
+      // v = w*r
+      th_radius_    = th_Vx_/th_w_;
+    }
+    th_curvature_ = 1000/th_radius_;
+
+    this->th_curvature_pub_->publish(std_msgs::build<std_msgs::msg::Float64>().data(th_curvature_));
+    this->th_radius_pub_   ->publish(std_msgs::build<std_msgs::msg::Float64>().data(th_radius_)   );
 
   }
 
@@ -867,6 +894,20 @@ class Skid_Steering : public rclcpp::Node
     this->slip_pub_->publish(std_msgs::build<std_msgs::msg::Float64>().data(slip_));
 
     //RCLCPP_INFO(this->get_logger(),"th_Vx: %f; ground_seed: %f; slip: %f",th_Vx_,ground_speed_,slip_);
+  }
+  
+  void imu_data_callback( const sensor_msgs::msg::Imu msg)
+  {
+    yaw_speed_    = msg.angular_velocity.z;
+    // v = w*r
+    if(fabs(yaw_speed_) < 0.00001) is_radius_ = 999999.9;
+    else
+      is_radius_ = ground_speed_/yaw_speed_;
+
+    is_curvature_ = 1000/is_radius_;
+
+    this->is_curvature_pub_->publish(std_msgs::build<std_msgs::msg::Float64>().data(is_curvature_));
+    this->is_radius_pub_->publish(std_msgs::build<std_msgs::msg::Float64>().data(is_radius_));
   }
 
   void call_async_get_pilot_steer_type()
